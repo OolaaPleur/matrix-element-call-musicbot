@@ -845,6 +845,33 @@ async function main() {
     });
     sessionManager.start();
 
+    // Clear any stale call memberships left by previous crashed sessions with different device IDs.
+    // m.call.member state keys: legacy = `_${userId}_${deviceId}`, matrix2 = `${userId}:${deviceId}`
+    try {
+        const roomState = room.currentState;
+        const staleKeys = [];
+        for (const evType of ["m.call.member", "org.matrix.msc3401.call.member"]) {
+            const stateMap = roomState.events.get(evType);
+            if (!stateMap) continue;
+            for (const [stateKey, stateEvent] of stateMap) {
+                const content = stateEvent.getContent();
+                const sender = stateEvent.getSender();
+                if (sender !== userId) continue;
+                // Skip if already empty/expired
+                if (!content || (Array.isArray(content.memberships) && content.memberships.length === 0)) continue;
+                // Skip if this is our current device (we'll overwrite it via joinRTCSession)
+                if (stateKey === `_${userId}_${deviceId}` || stateKey === `${userId}:${deviceId}`) continue;
+                staleKeys.push({ evType, stateKey });
+            }
+        }
+        for (const { evType, stateKey } of staleKeys) {
+            logLine(`clearing stale call membership state_key=${stateKey}`);
+            await client.sendStateEvent(roomId, evType, {}, stateKey);
+        }
+    } catch (err) {
+        logLine(`warning: ghost cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     const session = sessionManager.getRoomSession(room);
 
     let effectiveMembershipMode = membershipMode;

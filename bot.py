@@ -86,6 +86,7 @@ class IntegratedBot:
         self._message_seq = 0
         self._noisy_cooldown_until: dict[tuple[str, str], float] = {}
         self._message_priority_map = {"critical": 0, "normal": 1, "noisy": 2}
+        self._pending_megolm: dict[str, list[tuple[MatrixRoom, MegolmEvent]]] = defaultdict(list)
         self.call_worker = CallWorkerProcess(
             Path(__file__).resolve().parent,
             max_restart_attempts=config.WORKER_MAX_RESTART_ATTEMPTS,
@@ -989,10 +990,36 @@ class IntegratedBot:
         )
 
     async def _on_megolm_event(self, room: MatrixRoom, event: MegolmEvent):
+        pending = self._pending_megolm[event.session_id]
+        pending.append((room, event))
         try:
             await self.client.request_room_key(event)
         except Exception as exc:
             logger.debug("request_room_key failed for %s: %s", room.room_id, exc)
+        if len(pending) == 1:
+            asyncio.create_task(self._retry_megolm_decrypt(event.session_id))
+
+    async def _retry_megolm_decrypt(self, session_id: str):
+        for delay in (3, 8, 20, 60):
+            await asyncio.sleep(delay)
+            if session_id not in self._pending_megolm:
+                return
+            room, probe = self._pending_megolm[session_id][0]
+            try:
+                self.client.decrypt_event(probe)
+            except Exception:
+                continue
+            pending = self._pending_megolm.pop(session_id)
+            for r, ev in pending:
+                try:
+                    decrypted = self.client.decrypt_event(ev)
+                    if isinstance(decrypted, RoomMessageText):
+                        await self.on_message(r, decrypted)
+                except Exception as exc:
+                    logger.debug("E2EE retry: failed to decrypt %s: %s", ev.event_id, exc)
+            return
+        self._pending_megolm.pop(session_id, None)
+        logger.debug("E2EE: key for session %s never arrived, giving up", session_id)
 
     async def _setup_e2ee(self):
         if not _E2EE_AVAILABLE:
@@ -1866,6 +1893,18 @@ class IntegratedBot:
         logger.info("Voice backend: call worker enabled")
         self._run_startup_checks()
         logger.info("=" * 60)
+
+        if _E2EE_AVAILABLE:
+            _did_file = Path(__file__).resolve().parent / "data" / "device_id"
+            if _did_file.exists():
+                _did = _did_file.read_text(encoding="utf-8").strip()
+                if _did:
+                    try:
+                        self.client.restore_login(self.config.MATRIX_USER_ID, _did, self.config.MATRIX_ACCESS_TOKEN)
+                        _up = await self.client.keys_upload()
+                        logger.info("E2EE: early setup ok device_id=%s otk_counts=%s", _did, getattr(_up, "one_time_key_counts", "?"))
+                    except Exception as exc:
+                        logger.warning("E2EE: early setup failed: %s", exc)
 
         await self.client.sync(timeout=30000, full_state=True)
         self.first_sync_done = True
