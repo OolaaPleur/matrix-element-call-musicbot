@@ -8,7 +8,14 @@ import subprocess
 import time
 from typing import Awaitable, Callable, Optional
 
-from nio import AsyncClient, InviteMemberEvent, MatrixRoom, RoomMessageText
+from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText
+
+_E2EE_AVAILABLE = False
+try:
+    from nio.store import SqliteStore as _SqliteStore  # noqa: F401
+    _E2EE_AVAILABLE = True
+except ImportError:
+    pass
 
 from config import Config
 from audio_queue import AudioQueue
@@ -32,7 +39,12 @@ class IntegratedBot:
 
     def __init__(self, config: Config):
         self.config = config
-        self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID)
+        if _E2EE_AVAILABLE:
+            _store_dir = Path(__file__).resolve().parent / "data" / "crypto_store"
+            _store_dir.mkdir(parents=True, exist_ok=True)
+            self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID, store_path=str(_store_dir) + "/")
+        else:
+            self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID)
         self.client.access_token = config.MATRIX_ACCESS_TOKEN
         self.first_sync_done = False
 
@@ -96,6 +108,8 @@ class IntegratedBot:
 
         self.client.add_event_callback(self.on_message, RoomMessageText)
         self.client.add_event_callback(self.on_invite, InviteMemberEvent)
+        if _E2EE_AVAILABLE:
+            self.client.add_event_callback(self._on_megolm_event, MegolmEvent)
 
         self._command_handlers: dict[str, Callable[[MatrixRoom, str], Awaitable[None]]] = {}
         self._register_command_handlers()
@@ -649,8 +663,12 @@ class IntegratedBot:
     def _is_joined_in_room_call(self, room_id: str) -> bool:
         return self.call_worker.running and self.call_worker.room_id == room_id
 
+    def _active_call_room_id(self, command_room_id: str) -> str:
+        """Return the room the call worker is in, falling back to the command room."""
+        return self.call_worker.room_id or command_room_id
+
     async def _require_joined_in_room_call(self, room_id: str, command_name: str) -> bool:
-        if self._is_joined_in_room_call(room_id):
+        if self.call_worker.running:
             return True
         await self.send_message(
             room_id,
@@ -970,6 +988,84 @@ class IntegratedBot:
             expected_source=current_source,
         )
 
+    async def _on_megolm_event(self, room: MatrixRoom, event: MegolmEvent):
+        try:
+            await self.client.request_room_key(event)
+        except Exception as exc:
+            logger.debug("request_room_key failed for %s: %s", room.room_id, exc)
+
+    async def _setup_e2ee(self):
+        if not _E2EE_AVAILABLE:
+            return
+
+        # --- whoami ---
+        try:
+            response = await self.client.whoami()
+            if not hasattr(response, "device_id") or not response.device_id:
+                logger.warning("E2EE setup: whoami failed or returned no device_id: %s", response)
+                return
+            device_id: str = response.device_id
+            user_id: str = response.user_id
+            logger.info("E2EE: whoami ok user_id=%s device_id=%s", user_id, device_id)
+        except Exception as exc:
+            logger.warning("E2EE setup: whoami failed (%s), skipping E2EE", exc)
+            return
+
+        # --- persist device_id ---
+        try:
+            device_id_file = Path(__file__).resolve().parent / "data" / "device_id"
+            device_id_file.parent.mkdir(parents=True, exist_ok=True)
+            if device_id_file.exists():
+                stored = device_id_file.read_text(encoding="utf-8").strip()
+                if stored and stored != device_id:
+                    logger.warning(
+                        "E2EE: device_id changed from %s to %s — crypto store may be stale",
+                        stored,
+                        device_id,
+                    )
+            device_id_file.write_text(device_id, encoding="utf-8")
+            logger.info("E2EE: device_id persisted")
+        except Exception as exc:
+            logger.warning("E2EE: could not persist device_id (%s), continuing", exc)
+
+        # --- restore_login ---
+        try:
+            self.client.restore_login(user_id, device_id, self.config.MATRIX_ACCESS_TOKEN)
+            logger.info("E2EE: restore_login ok")
+        except Exception as exc:
+            logger.warning("E2EE: restore_login failed (%s), skipping E2EE", exc)
+            return
+
+        # --- keys_upload ---
+        try:
+            upload_resp = await self.client.keys_upload()
+            if not hasattr(upload_resp, "one_time_key_counts"):
+                logger.warning("E2EE: keys_upload unexpected response: %s", upload_resp)
+            else:
+                logger.info("E2EE: keys_upload ok one_time_key_counts=%s", upload_resp.one_time_key_counts)
+        except Exception as exc:
+            logger.debug("E2EE: keys_upload skipped: %s", exc)
+
+        # --- keys_query ---
+        try:
+            await self.client.keys_query()
+            logger.info("E2EE: keys_query ok")
+        except Exception as exc:
+            logger.debug("E2EE: keys_query skipped: %s", exc)
+
+        # --- inject device_id for call worker ---
+        self.call_worker._env_overrides["MATRIX_DEVICE_ID"] = device_id
+        logger.info("E2EE setup complete device_id=%s", device_id)
+
+        # --- share group session for already-joined encrypted rooms ---
+        for room_id, room_obj in self.client.rooms.items():
+            if room_obj.encrypted:
+                try:
+                    await self.client.share_group_session(room_id, ignore_unverified_devices=True)
+                    logger.info("E2EE: shared group session for room %s", room_id)
+                except Exception as exc:
+                    logger.warning("E2EE: share_group_session failed for %s: %s", room_id, exc)
+
     async def on_invite(self, room: MatrixRoom, event: InviteMemberEvent):
         if not self.config.AUTO_ACCEPT_INVITES:
             logger.info("Invite received for %s but auto-accept is disabled", room.room_id)
@@ -977,6 +1073,14 @@ class IntegratedBot:
 
         logger.info(f"Invited to {room.display_name}")
         await self.client.join(room.room_id)
+        if _E2EE_AVAILABLE:
+            joined_room = self.client.rooms.get(room.room_id)
+            if joined_room and joined_room.encrypted:
+                try:
+                    await self.client.share_group_session(room.room_id, ignore_unverified_devices=True)
+                    logger.info("E2EE: shared group session for newly joined room %s", room.room_id)
+                except Exception as exc:
+                    logger.warning("E2EE: share_group_session on invite failed for %s: %s", room.room_id, exc)
         await self.send_message(
             room.room_id,
             "🎵 Music Bot ready. Use `!help` to see commands.",
@@ -1065,7 +1169,21 @@ class IntegratedBot:
             return
 
         if command == "!join":
-            await self._join_call_for_room(room.room_id, announce_if_already_joined=True)
+            target = args.strip() if args and args.strip().startswith("!") and ":" in args else None
+            if target:
+                if self._is_joined_in_room_call(target):
+                    await self.send_message(room.room_id, f"ℹ️ Already joined call in {target}")
+                elif not self.call_worker.available:
+                    await self.send_message(room.room_id, "❌ Call worker not found")
+                else:
+                    try:
+                        await self.call_worker.start(target)
+                        await self.send_message(room.room_id, f"✅ Joined Element Call in {target}")
+                        await self._apply_audio_settings_to_worker()
+                    except Exception as exc:
+                        await self.send_message(room.room_id, f"❌ Failed to join call in {target}: {exc}")
+            else:
+                await self._join_call_for_room(room.room_id, announce_if_already_joined=True)
             return
 
         if command == "!leave":
@@ -1085,6 +1203,7 @@ class IntegratedBot:
                 await self.send_message(room.room_id, "❌ Usage: !play <audio-url-or-query>")
                 return
 
+            call_room_id = self._active_call_room_id(room.room_id)
             async with self._play_request_lock:
                 self._cancel_background_load()
 
@@ -1097,11 +1216,11 @@ class IntegratedBot:
                         playlist_info = resolved
 
                 if not playlist_ok:
-                    streamed = await self._try_stream_first_idle_play(room.room_id, args)
+                    streamed = await self._try_stream_first_idle_play(call_room_id, args)
                     if streamed:
                         return
 
-                if not await self._join_call_for_room(room.room_id):
+                if not await self._join_call_for_room(call_room_id):
                     return
 
                 if playlist_ok and isinstance(playlist_info, dict):
@@ -1156,14 +1275,14 @@ class IntegratedBot:
                             non_cacheable=bool(first_item.get("non_cacheable")),
                         )
                         if not had_current:
-                            await self._advance_queue(room.room_id, force_next=True)
+                            await self._advance_queue(call_room_id, force_next=True)
 
                     loaded_count = 1
                     remaining_sources = [src for idx, src in enumerate(filtered_sources) if idx != first_index]
                     if remaining_sources:
                         self._background_load_task = asyncio.create_task(
                             self._load_remaining_tracks(
-                                room.room_id,
+                                call_room_id,
                                 playlist_name,
                                 remaining_sources,
                                 dedupe_existing=True,
@@ -1258,7 +1377,7 @@ class IntegratedBot:
                 if queued_message:
                     await self.send_message(room.room_id, queued_message)
                 if should_advance:
-                    await self._advance_queue(room.room_id, force_next=True)
+                    await self._advance_queue(call_room_id, force_next=True)
             return
 
         if command == "!queue":
@@ -1750,12 +1869,30 @@ class IntegratedBot:
 
         await self.client.sync(timeout=30000, full_state=True)
         self.first_sync_done = True
+        await self._setup_e2ee()
         self._start_message_dispatcher()
         self._ensure_advance_watchdog()
         logger.info("Bot ready")
 
         try:
-            await self.client.sync_forever(timeout=30000, full_state=False)
+            backoff = 5
+            while not getattr(self, "_shutdown", False):
+                try:
+                    await self.client.sync_forever(
+                        timeout=30000,
+                        full_state=False,
+                        loop_sleep_time=5000,
+                    )
+                    backoff = 5
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning(
+                        "sync_forever crashed (%s), retrying in %ds",
+                        exc, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 300)
         finally:
             self._cancel_auto_advance()
             self._cancel_advance_watchdog()
