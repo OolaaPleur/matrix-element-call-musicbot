@@ -9,6 +9,7 @@ import time
 from typing import Awaitable, Callable, Optional
 
 from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText
+from cross_signing import ensure_cross_signing
 
 _E2EE_AVAILABLE = False
 try:
@@ -1079,6 +1080,19 @@ class IntegratedBot:
             logger.info("E2EE: keys_query ok")
         except Exception as exc:
             logger.debug("E2EE: keys_query skipped: %s", exc)
+
+        # --- cross-signing bootstrap ---
+        try:
+            _data_dir = Path(__file__).resolve().parent / "data"
+            await ensure_cross_signing(
+                homeserver=self.config.MATRIX_HOMESERVER,
+                token=self.config.MATRIX_ACCESS_TOKEN,
+                user_id=user_id,
+                device_id=device_id,
+                data_dir=_data_dir,
+            )
+        except Exception as exc:
+            logger.warning("E2EE: cross-signing setup failed: %s", exc)
 
         # --- inject device_id for call worker ---
         self.call_worker._env_overrides["MATRIX_DEVICE_ID"] = device_id
