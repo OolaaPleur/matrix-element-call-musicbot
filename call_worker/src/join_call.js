@@ -146,7 +146,9 @@ const logStream = fs.createWriteStream(logFilePath, { flags: "a" });
 
 function logLine(message) {
     const ts = new Date().toISOString();
-    logStream.write(`[${ts}] ${message}\n`);
+    const formatted = `[${ts}] ${message}`;
+    logStream.write(`${formatted}\n`);
+    process.stderr.write(`${formatted}\n`);
 }
 
 function emit(event) {
@@ -274,6 +276,7 @@ async function fetchWhoAmI(baseUrl, accessToken) {
     }
     return response.json();
 }
+
 
 async function fetchJson(url) {
     const response = await fetch(url);
@@ -485,8 +488,9 @@ class CallWorker {
             );
         }
 
+        const roomOptions = { autoSubscribe: true, dynacast: true };
         const room = new Room();
-        await room.connect(config.url, config.jwt, { autoSubscribe: true, dynacast: true });
+        await room.connect(config.url, config.jwt, roomOptions);
         logLine(`livekit connected auth_mode=${config._auth_mode || "unknown"}`);
 
         this.audioSource = new AudioSource(SAMPLE_RATE, CHANNELS);
@@ -896,6 +900,7 @@ async function main() {
     });
 
     await worker.connectLivekit();
+
     emit({ event: "joined", roomId, mode: effectiveMembershipMode });
 
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
