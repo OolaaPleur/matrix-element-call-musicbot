@@ -205,7 +205,7 @@ def _verify_device_sig(server_data: dict, user_id: str, device_id: str, ss_pub: 
     sig_b64 = device.get("signatures", {}).get(user_id, {}).get(sig_key_id)
     if not sig_b64:
         return False
-    to_verify = {k: v for k, v in device.items() if k != "signatures"}
+    to_verify = {k: v for k, v in device.items() if k not in ("signatures", "unsigned")}
     try:
         VerifyKey(_unb64(ss_pub)).verify(_canonical_json(to_verify), _unb64(sig_b64))
         return True
@@ -229,7 +229,7 @@ async def _sign_device(
         logger.error("Cross-signing: device %s not found in server keys query", device_id)
         return False
 
-    to_sign = {k: v for k, v in device.items() if k != "signatures"}
+    to_sign = {k: v for k, v in device.items() if k not in ("signatures", "unsigned")}
     new_sig = _sign_obj(ss_sk, to_sign)
 
     existing = device.get("signatures", {}).get(user_id, {})
