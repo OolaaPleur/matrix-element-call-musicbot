@@ -33,6 +33,29 @@ Discord-style music bot UX for Matrix: chat commands (`!play`, `!queue`, `!skip`
 - No encrypted call media support yet
 - Single active playback session at a time (no sharding/multi-room playback yet)
 
+## Cross-Signing and User Verification
+
+The bot automatically bootstraps Matrix cross-signing on startup (master key, self-signing key, user-signing key). This removes the "encrypted by device not verified by its owner" warning next to bot messages.
+
+### Manual user verification from Element
+
+To get a green verified shield on the bot user in Element:
+
+1. Run the fingerprint script from the project root:
+   ```
+   python scripts/show_cross_signing_fingerprint.py
+   ```
+2. In Element, open the bot user profile → **Verify User** → **Verify manually**
+3. Compare the master key shown in Element with the `Master key (grouped)` line from the script output
+4. Confirm in Element
+
+Add `--check-server` to also verify the local key matches what is currently uploaded (requires the bot to be running with a live token):
+```
+python scripts/show_cross_signing_fingerprint.py --check-server
+```
+
+Private keys are stored in `data/cross_signing_keys.json` (chmod 600, gitignored). If this file is deleted, the bot will initiate a new cross-signing reset on next startup.
+
 ## Troubleshooting
 
 ### `UnsupportedStickyEventsEndpointError` when joining call
