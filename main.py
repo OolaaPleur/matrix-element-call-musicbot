@@ -73,7 +73,7 @@ async def main():
 
     try:
         await bot.start()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Shutting down...")
 
 
