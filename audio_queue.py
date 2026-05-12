@@ -376,12 +376,21 @@ class AudioQueue:
         if not isinstance(stream_url, str) or not stream_url.strip():
             stream_url = None
 
+        artist  = entry.get("artist")  or ""
+        track   = entry.get("track")   or ""
+        album   = entry.get("album")   or ""
+        channel = entry.get("channel") or entry.get("uploader") or ""
+
         out = {
             "source_url": source_url,
             "title": title,
             "duration": float(duration) if isinstance(duration, (int, float)) else None,
             "uploader": uploader,
             "stream_url": stream_url,
+            "artist": artist,
+            "track": track,
+            "album": album,
+            "channel": channel,
         }
         return True, out
 
@@ -417,6 +426,10 @@ class AudioQueue:
             "title": metadata.get("title") or os.path.basename(query_or_url) or "track",
             "duration": metadata.get("duration"),
             "uploader": metadata.get("uploader"),
+            "artist":  metadata.get("artist",  ""),
+            "track":   metadata.get("track",   ""),
+            "album":   metadata.get("album",   ""),
+            "channel": metadata.get("channel", ""),
         }
 
     async def _resolve_direct_stream_url(self, dlp_cmd: str, target: str) -> tuple[bool, str]:
@@ -583,6 +596,10 @@ class AudioQueue:
                 "source_url": source_url,
                 "uploader": resolved["uploader"],
                 "non_cacheable": non_cacheable,
+                "artist":  resolved.get("artist",  ""),
+                "track":   resolved.get("track",   ""),
+                "album":   resolved.get("album",   ""),
+                "channel": resolved.get("channel", ""),
             }
 
         url_hash = hashlib.md5(source_url.encode(), usedforsecurity=False).hexdigest()[:8]
@@ -690,6 +707,10 @@ class AudioQueue:
                 "source_url": source_url,
                 "uploader": resolved["uploader"],
                 "non_cacheable": non_cacheable,
+                "artist":  resolved.get("artist",  ""),
+                "track":   resolved.get("track",   ""),
+                "album":   resolved.get("album",   ""),
+                "channel": resolved.get("channel", ""),
             }
         except Exception as exc:
             logger.error(f"Download exception: {exc}")

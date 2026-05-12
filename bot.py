@@ -3,12 +3,15 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import time
 from typing import Awaitable, Callable, Optional
+import uuid
+from urllib.parse import urlparse
 
-from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText
+from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText, UnknownEvent
 from cross_signing import ensure_cross_signing
 
 _E2EE_AVAILABLE = False
@@ -25,6 +28,65 @@ from saved_queues import SavedQueueStore
 
 
 logger = logging.getLogger(__name__)
+
+EVT_TRACK_STARTED  = "dev.oolaa.musicbot.track_started"
+EVT_TRACK_FINISHED = "dev.oolaa.musicbot.track_finished"
+BOT_KIND = "matrix-element-call-musicbot"
+
+
+def detect_source(url: str) -> str:
+    host = (urlparse(url).netloc or "").lower()
+    if host == "music.youtube.com":
+        return "youtube_music"
+    if host in {"youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"}:
+        return "youtube"
+    return "other"
+
+
+_NOISE_RE = re.compile(
+    r"\s*[\(\[][^)\]]*"
+    r"(?:official|video|audio|lyrics?|hd|4k|"
+    r"remaster(?:ed)?|live|music\s*video|mv|"
+    r"visualizer|explicit|clean|extended)"
+    r"[^)\]]*[\)\]]\s*",
+    re.IGNORECASE,
+)
+_TOPIC_SUFFIX_RE = re.compile(r"\s*-\s*Topic\s*$", re.IGNORECASE)
+
+
+def _clean_title(title: str) -> str:
+    prev = None
+    cur = title
+    while prev != cur:
+        prev = cur
+        cur = _NOISE_RE.sub(" ", cur).strip()
+    cur = _TOPIC_SUFFIX_RE.sub("", cur).strip()
+    return cur.strip(" -")
+
+
+def extract_metadata(yt_info: dict) -> tuple[str, str, str, str]:
+    """Returns (artist, track, album, quality) where quality is 'high' or 'low'."""
+    yt_artist = (yt_info.get("artist") or "").strip()
+    yt_track  = (yt_info.get("track")  or "").strip()
+    yt_album  = (yt_info.get("album")  or "").strip()
+    if yt_artist and yt_track:
+        return yt_artist, yt_track, yt_album, "high"
+
+    title = (yt_info.get("title") or "").strip()
+    if " - " in title:
+        left, right = title.split(" - ", 1)
+        artist = _TOPIC_SUFFIX_RE.sub("", left).strip()
+        track = _clean_title(right)
+        if artist and track:
+            return artist, track, yt_album, "low"
+
+    channel = (yt_info.get("channel") or yt_info.get("uploader") or "").strip()
+    cleaned = _clean_title(title)
+    if channel and cleaned:
+        channel = _TOPIC_SUFFIX_RE.sub("", channel).strip()
+        return channel, cleaned, yt_album, "low"
+
+    return "", "", "", "low"
 
 
 @dataclass(slots=True)
@@ -88,6 +150,8 @@ class IntegratedBot:
         self._noisy_cooldown_until: dict[tuple[str, str], float] = {}
         self._message_priority_map = {"critical": 0, "normal": 1, "noisy": 2}
         self._pending_megolm: dict[str, list[tuple[MatrixRoom, MegolmEvent]]] = defaultdict(list)
+        self._call_participants: dict[str, set[str]] = {}
+        self._active_play: dict | None = None
         self.call_worker = CallWorkerProcess(
             Path(__file__).resolve().parent,
             max_restart_attempts=config.WORKER_MAX_RESTART_ATTEMPTS,
@@ -112,6 +176,7 @@ class IntegratedBot:
         self.client.add_event_callback(self.on_invite, InviteMemberEvent)
         if _E2EE_AVAILABLE:
             self.client.add_event_callback(self._on_megolm_event, MegolmEvent)
+        self.client.add_event_callback(self._on_call_member_state, UnknownEvent)
 
         self._command_handlers: dict[str, Callable[[MatrixRoom, str], Awaitable[None]]] = {}
         self._register_command_handlers()
@@ -121,6 +186,50 @@ class IntegratedBot:
             self._auto_advance_task.cancel()
             logger.info("Cancelled auto-advance timer")
         self._auto_advance_task = None
+
+    async def _on_call_member_state(self, room: MatrixRoom, event):
+        if event.source.get("type") != "org.matrix.msc3401.call.member":
+            return
+        content = event.source.get("content", {})
+        user_id = event.source.get("state_key", "")
+        if not user_id:
+            return
+        room_id = room.room_id
+        memberships = content.get("memberships", [])
+        active = any(m.get("application") == "m.call" for m in memberships)
+        if active:
+            self._call_participants.setdefault(room_id, set()).add(user_id)
+        else:
+            self._call_participants.get(room_id, set()).discard(user_id)
+
+    def get_call_participants(self, room_id: str) -> list[str]:
+        participants = self._call_participants.get(room_id, set())
+        return [u for u in participants if u != self.client.user_id]
+
+    async def _emit_track_finished(self, call_room_id: str, reason: str, played_s: int):
+        if self._active_play is None or self._active_play.get("finished"):
+            return
+        self._active_play["finished"] = True
+
+        current = set(self.get_call_participants(call_room_id))
+        eligible = list(self._active_play["started_participants"] & current)
+
+        try:
+            await self.client.room_send(
+                room_id=call_room_id,
+                message_type=EVT_TRACK_FINISHED,
+                content={
+                    "play_id": self._active_play["play_id"],
+                    "played_s": int(played_s),
+                    "reason": reason,
+                    "finished_at": int(time.time()),
+                    "eligible_participants": eligible,
+                },
+                ignore_unverified_devices=False,
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit track_finished: %s", exc)
+        self._active_play = None
 
     def _start_message_dispatcher(self):
         if self._message_dispatch_task and not self._message_dispatch_task.done():
@@ -563,6 +672,40 @@ class IntegratedBot:
 
         await self.send_message(room_id, f"▶️ Now playing: {title}")
 
+        _artist, _track_name, _album, _quality = extract_metadata(track)
+        _source = detect_source(track.get("source_url", ""))
+        _play_id = str(uuid.uuid4())
+        _participants = self.get_call_participants(room_id)
+        _started_at = int(time.time())
+        self._active_play = {
+            "play_id": _play_id,
+            "started_at": _started_at,
+            "started_participants": set(_participants),
+            "duration_s": int(track.get("duration") or 0),
+            "finished": False,
+        }
+        try:
+            await self.client.room_send(
+                room_id=room_id,
+                message_type=EVT_TRACK_STARTED,
+                content={
+                    "play_id": _play_id,
+                    "source": _source,
+                    "source_url": track.get("source_url", ""),
+                    "artist": _artist,
+                    "track": _track_name,
+                    "album": _album,
+                    "duration_s": int(track.get("duration") or 0),
+                    "metadata_quality": _quality,
+                    "started_at": _started_at,
+                    "call_participants": _participants,
+                    "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
+                },
+                ignore_unverified_devices=False,
+            )
+        except Exception as _exc:
+            logger.warning("Failed to emit track_started: %s", _exc)
+
         if self.config.STREAM_PREFETCH_CURRENT and isinstance(source_url, str) and source_url:
             self._stream_prefetch_task = asyncio.create_task(
                 self._prefetch_current_track_file(room_id, source_url, generation)
@@ -717,6 +860,9 @@ class IntegratedBot:
                 self._cancel_auto_advance()
                 self._current_track_started_at = None
 
+                _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
+                await self._emit_track_finished(room_id, "error", _played_s)
+
                 if self.audio_queue.queue:
                     await self._advance_queue(room_id, force_next=True, pre_stop=False)
                     return
@@ -738,6 +884,9 @@ class IntegratedBot:
         event_name = event.get("event")
         if event_name != "play_ended":
             return
+
+        _played_s = event.get("played_s") or (int(time.time() - self._active_play["started_at"]) if self._active_play else 0)
+        await self._emit_track_finished(room_id, "finished", _played_s)
 
         async with self._playback_lock:
             await self._advance_queue(room_id, force_next=not self.audio_queue.loop_mode)
@@ -925,6 +1074,10 @@ class IntegratedBot:
         force_next: bool = False,
         pre_stop: bool = True,
     ):
+        if self._active_play and not self._active_play.get("finished"):
+            played_s = int(time.time() - self._active_play["started_at"])
+            await self._emit_track_finished(room_id, "finished", played_s)
+
         previous_current = self.audio_queue.current
         if from_timer:
             self._auto_advance_task = None
@@ -962,6 +1115,41 @@ class IntegratedBot:
             self._current_track_started_at = asyncio.get_running_loop().time()
             self._push_play_history(room_id, next_track)
             await self.send_message(room_id, f"▶️ Now playing: {next_track['title']}{loop_indicator}")
+
+            _artist, _track_name, _album, _quality = extract_metadata(next_track)
+            _source = detect_source(next_track.get("source_url", ""))
+            _play_id = str(uuid.uuid4())
+            _participants = self.get_call_participants(room_id)
+            _started_at = int(time.time())
+            self._active_play = {
+                "play_id": _play_id,
+                "started_at": _started_at,
+                "started_participants": set(_participants),
+                "duration_s": int(next_track.get("duration") or 0),
+                "finished": False,
+            }
+            try:
+                await self.client.room_send(
+                    room_id=room_id,
+                    message_type=EVT_TRACK_STARTED,
+                    content={
+                        "play_id": _play_id,
+                        "source": _source,
+                        "source_url": next_track.get("source_url", ""),
+                        "artist": _artist,
+                        "track": _track_name,
+                        "album": _album,
+                        "duration_s": int(next_track.get("duration") or 0),
+                        "metadata_quality": _quality,
+                        "started_at": _started_at,
+                        "call_participants": _participants,
+                        "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
+                    },
+                    ignore_unverified_devices=False,
+                )
+            except Exception as _exc:
+                logger.warning("Failed to emit track_started: %s", _exc)
+
             self._worker_playback_task = asyncio.create_task(
                 self._wait_for_worker_playback(room_id, generation, current_source)
             )
@@ -1231,6 +1419,10 @@ class IntegratedBot:
             if not self.call_worker.running:
                 await self.send_message(room.room_id, "ℹ️ Not currently in a call")
                 return
+
+            _call_room = self.call_worker.room_id or room.room_id
+            _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
+            await self._emit_track_finished(_call_room, "stopped", _played_s)
 
             self._cancel_worker_playback_wait()
             self._cancel_background_load()
@@ -1792,6 +1984,9 @@ class IntegratedBot:
                 else:
                     self._last_skip_at = now
                     asyncio.create_task(self.send_message(room.room_id, "⏭️ Skipping...", priority="noisy"))
+                    _call_room = self.call_worker.room_id or room.room_id
+                    _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
+                    await self._emit_track_finished(_call_room, "skipped", _played_s)
                     self._cancel_worker_playback_wait()
                     await self.call_worker.stop_playback(wait_for_terminal=False)
                     await self._advance_queue(room.room_id, force_next=True, pre_stop=False)
@@ -1825,6 +2020,10 @@ class IntegratedBot:
         if command == "!stop":
             if not await self._require_joined_in_room_call(room.room_id, "!stop"):
                 return
+
+            _call_room = self.call_worker.room_id or room.room_id
+            _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
+            await self._emit_track_finished(_call_room, "stopped", _played_s)
 
             self._cancel_auto_advance()
             self._cancel_worker_playback_wait()
