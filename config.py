@@ -74,6 +74,9 @@ class Config:
             "auto_accept_invites",
             self.DEFAULTS["bot.auto_accept_invites"],
         )
+        self.AUTO_ACCEPT_INVITES_FROM: list[str] = self._get_str_list(
+            "AUTO_ACCEPT_INVITES_FROM", "bot", "auto_accept_invites_from"
+        )
         self.COMMAND_PREFIX = (
             self._get_str("COMMAND_PREFIX", "bot", "command_prefix", default=self.DEFAULTS["bot.command_prefix"])
             or self.DEFAULTS["bot.command_prefix"]
@@ -366,6 +369,17 @@ class Config:
             return False
         raise ValueError(f"{env_name}/{section}.{key} must be a boolean-like value, got: {raw!r}")
 
+    def _get_str_list(self, env_name: str, section: str, key: str) -> list[str]:
+        from_env = os.environ.get(env_name)
+        if from_env is not None:
+            return [s.strip() for s in from_env.split(",") if s.strip()]
+        from_toml = self._toml_get(section, key)
+        if from_toml is None:
+            return []
+        if isinstance(from_toml, list):
+            return [str(s) for s in from_toml if str(s).strip()]
+        return [s.strip() for s in str(from_toml).split(",") if s.strip()]
+
     @staticmethod
     def _load_dotenv_file():
         """Load key=value pairs from local .env into os.environ if unset."""
@@ -400,6 +414,7 @@ class Config:
             f"bot.command_prefix = {cls.DEFAULTS['bot.command_prefix']}",
             f"bot.history_limit = {cls.DEFAULTS['bot.history_limit']}",
             f"bot.auto_accept_invites = {str(cls.DEFAULTS['bot.auto_accept_invites']).lower()}",
+            "bot.auto_accept_invites_from = [] (accept all when auto_accept_invites is true)",
             f"paths.audio_dir = {cls.DEFAULTS['paths.audio_dir']}",
             f"paths.saved_queues_file = {cls.DEFAULTS['paths.saved_queues_file']}",
             f"audio.auto_advance_buffer = {cls.DEFAULTS['audio.auto_advance_buffer']}",

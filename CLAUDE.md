@@ -40,7 +40,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - Drives the Node.js call worker via `CallWorkerProcess`
 - Uses a priority `asyncio.PriorityQueue` for outbound messages: `critical=0`, `normal=1`, `noisy=2`
 - `QUIET_MODE=true` (default) suppresses `noisy` messages; `critical` always sends
-- Emits `dev.oolaa.musicbot.track_started` / `dev.oolaa.musicbot.track_finished` custom room events for the companion scrobbler bot; `_active_play` tracks the in-flight play state; `_emit_track_finished` has a double-emit guard
+- Emits `dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished` custom room events for the companion scrobbler bot; `_active_play` tracks the in-flight play state; `_emit_track_finished` has a double-emit guard
 
 ### Node.js call worker (`call_worker/src/join_call.js`)
 - Spawned as a subprocess per `!join` call; stdin/stdout carry newline-delimited JSON commands/events
@@ -70,9 +70,9 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - On startup, `cross_signing.py:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs
 - Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored)
 - Megolm retry: undecryptable events are retried at 3/8/20/60s intervals after requesting room keys
-- Device verification: use `/verify <device_id> <ed25519_fingerprint>` in Element as `@oolaa:matrix.org`
+- Device verification: use `/verify <device_id> <ed25519_fingerprint>` in Element as `@youruser:matrix.org`
   - `device_id`: `cat data/device_id`
-  - fingerprint: query the server — `curl -s "https://matrix-client.matrix.org/_matrix/client/v3/keys/query" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"device_keys":{"@musicbot-oolaa:matrix.org":["<device_id>"]}}' | python3 -m json.tool`
+  - fingerprint: query the server — `curl -s "https://<homeserver>/_matrix/client/v3/keys/query" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"device_keys":{"@yourbotname:matrix.org":["<device_id>"]}}' | python3 -m json.tool`
   - Or use `python scripts/show_cross_signing_fingerprint.py` for the cross-signing key
 
 ### Configuration (`config.py` — `Config`)

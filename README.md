@@ -1,6 +1,6 @@
 # Matrix Element Call MusicBot
 
-Discord-style music bot UX for Matrix: chat commands (`!play`, `!queue`, `!skip`, etc.) plus real playback in Element Call.
+Discord-style music bot UX for Matrix: chat commands (`!m play`, `!m queue`, `!m skip`, etc.) plus real playback in Element Call.
 
 ## Features
 
@@ -15,6 +15,17 @@ Discord-style music bot UX for Matrix: chat commands (`!play`, `!queue`, `!skip`
 - Built-in diagnostics and runtime status commands
 - Quiet-mode messaging defaults for less chat noise during playback
 - Fast search defaults for quicker `!play` query resolution
+
+## Configurable Command Prefix
+
+The default prefix is `!m` — all commands are `!m play`, `!m skip`, `!m help`, etc.
+Shorthands work too: `!m p`, `!m s`, `!m h`.
+
+To change the prefix, set in `config.toml`:
+```toml
+[bot]
+command_prefix = "!m"   # change to anything, e.g. "!music" or "!dj"
+```
 
 ## Performance Defaults
 
@@ -32,6 +43,28 @@ Discord-style music bot UX for Matrix: chat commands (`!play`, `!queue`, `!skip`
 
 - No encrypted call media support yet
 - Single active playback session at a time (no sharding/multi-room playback yet)
+
+## Companion Scrobbler Bot
+
+This bot emits custom Matrix room events (`dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished`) that a companion scrobbler bot can listen for to scrobble played tracks to Last.fm.
+
+Companion scrobbler: **https://github.com/OolaaPleur/matrix-element-call-scrobbler**
+
+Both bots must share the same room to exchange events. The command prefix is configurable (`bot.command_prefix`) so their commands don't collide — by default the music bot uses `!m` and the scrobbler uses `!fm`.
+
+## Invite Security
+
+By default `auto_accept_invites = false` — the bot ignores all room invites.
+
+To allow only specific users to invite the bot:
+
+```toml
+[bot]
+auto_accept_invites = true
+auto_accept_invites_from = ["@youruser:matrix.org"]
+```
+
+When `auto_accept_invites_from` is set, only those users can trigger auto-join; all other senders are silently ignored regardless of `auto_accept_invites`.
 
 ## Cross-Signing and User Verification
 
@@ -104,109 +137,39 @@ Long-term fix:
 
 ### Playback
 
-- `!help` (`!h`) - show this help
-- `!join` (`!j`) - join Element Call in this room
-- `!leave` (`!lv`) - leave current Element Call
-- `!play` (`!p`) `<url-or-query>` - add track and auto-join call if needed
-- `!queue` (`!q`) - show queue with ETA
-- `!nowplaying` (`!np`) - show current track
-- `!skip` (`!s`) - skip current track
-- `!stop` (`!x`) - stop playback and clear queue
-- `!loop` (`!lp`) - toggle loop mode
-- `!history` (`!hist`) - show recent playback history
+- `!m help` (`h`) — show this help
+- `!m join` (`j`) — join Element Call in this room
+- `!m leave` (`lv`) — leave current Element Call
+- `!m play` (`p`) `<url-or-query>` — add track and auto-join call if needed
+- `!m queue` (`q`) — show queue with ETA
+- `!m nowplaying` (`np`) — show current track
+- `!m skip` (`s`) — skip current track
+- `!m stop` (`x`) — stop playback and clear queue
+- `!m loop` (`lp`) — toggle loop mode
+- `!m history` (`hist`) — show recent playback history
 
 ### Saved Queues
 
-- `!save` (`!sv`) `<name> [--force]` - save current+upcoming queue
-- `!load` (`!ld`) `<name>` - load a saved queue
-- `!queues` (`!qs`) - list saved queues
-- `!deletequeue` (`!dq`) `<name>` - delete a saved queue
-- `!renamequeue` (`!rq`) `<old> <new>` - rename a saved queue
+- `!m save` (`sv`) `<name> [--force]` — save current+upcoming queue
+- `!m load` (`ld`) `<name>` — load a saved queue
+- `!m queues` (`qs`) — list saved queues
+- `!m deletequeue` (`dq`) `<name>` — delete a saved queue
+- `!m renamequeue` (`rq`) `<old> <new>` — rename a saved queue
 
 ### Audio & Info
 
-- `!audio` (`!a`) - show current audio settings
-- `!normalize` (`!norm`) `on|off` - toggle normalization
-- `!fadein` (`!fi`) `<ms>` - set fade-in (`0-5000`)
-- `!volume` (`!v`) `<0-200>` - set playback volume percent
-- `!status` (`!st`) - show bot status
-- `!diag` (`!d`) - show diagnostics
-- `!config` (`!cfg`) - show active config
-- `!defaults` (`!df`) - show default config values
+- `!m audio` (`a`) — show current audio settings
+- `!m normalize` (`norm`) `on|off` — toggle normalization
+- `!m fadein` (`fi`) `<ms>` — set fade-in (0–5000)
+- `!m volume` (`v`) `<0-200>` — set playback volume percent
+- `!m status` (`st`) — show bot status
+- `!m diag` (`d`) — show diagnostics
+- `!m config` (`cfg`) — show active config
+- `!m defaults` (`df`) — show default config values
 
-## Docker (Prebuilt Image, Recommended)
+## Docker
 
-Use this for prebuilt images. 
-
-### Linux
-
-```bash
-mkdir -p matrix-musicbot/config
-cd matrix-musicbot
-
-# Prebuilt image on GHCR
-cat > docker-compose.yml <<'YAML'
-services:
-  musicbot:
-    image: ghcr.io/sultanalburaq/matrix-element-call-musicbot:latest
-    container_name: musicbot
-    restart: unless-stopped
-    environment:
-      - CONFIG_FILE=/app/config/config.toml
-    volumes:
-      - ./config:/app/config:ro
-      - musicbot_logs:/app/logs
-      - musicbot_data:/app/data
-      - musicbot_cache:/tmp/musicbot_audio
-
-volumes:
-  musicbot_logs:
-  musicbot_data:
-  musicbot_cache:
-YAML
-
-# Create config file
-cp /path/to/config/config.example.toml config/config.toml
-# Edit config/config.toml and set matrix.homeserver, matrix.user_id, matrix.access_token
-
-docker compose up -d
-```
-
-### Windows (PowerShell)
-
-```powershell
-New-Item -ItemType Directory -Path matrix-musicbot\config -Force | Out-Null
-Set-Location matrix-musicbot
-
-@"
-services:
-  musicbot:
-    image: ghcr.io/sultanalburaq/matrix-element-call-musicbot:latest
-    container_name: musicbot
-    restart: unless-stopped
-    environment:
-      - CONFIG_FILE=/app/config/config.toml
-    volumes:
-      - ./config:/app/config:ro
-      - musicbot_logs:/app/logs
-      - musicbot_data:/app/data
-      - musicbot_cache:/tmp/musicbot_audio
-
-volumes:
-  musicbot_logs:
-  musicbot_data:
-  musicbot_cache:
-"@ | Set-Content docker-compose.yml
-
-# Copy /path/to/config/config.example.toml to .\config\config.toml
-# Edit .\config\config.toml and set matrix.homeserver, matrix.user_id, matrix.access_token
-
-docker compose up -d
-```
-
-## Docker (Build It Yourself From Release)
-
-Use this when you want to download source release archives and build locally.
+Build from the source of this repository to get all fork features.
 
 ### Linux
 
@@ -285,6 +248,10 @@ docker logs --tail=100 musicbot
 
 Then in Matrix room:
 
-- `!help`
-- `!join`
-- `!play never gonna give you up`
+- `!m help`
+- `!m join`
+- `!m play never gonna give you up`
+
+## Attribution
+
+Forked from [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot).

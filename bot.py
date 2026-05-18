@@ -29,8 +29,8 @@ from saved_queues import SavedQueueStore
 
 logger = logging.getLogger(__name__)
 
-EVT_TRACK_STARTED  = "dev.oolaa.musicbot.track_started"
-EVT_TRACK_FINISHED = "dev.oolaa.musicbot.track_finished"
+EVT_TRACK_STARTED  = "dev.elementcall.musicbot.track_started"
+EVT_TRACK_FINISHED = "dev.elementcall.musicbot.track_finished"
 BOT_KIND = "matrix-element-call-musicbot"
 
 
@@ -523,7 +523,11 @@ class IntegratedBot:
             f"Playlist max tracks/request: {self.config.PLAYLIST_MAX_TRACKS_PER_REQUEST}",
             f"Playlist background concurrency: {self.config.PLAYLIST_BACKGROUND_LOAD_CONCURRENCY}",
             f"History limit: {self.config.HISTORY_LIMIT}",
-            f"Auto-accept invites: {'On' if self.config.AUTO_ACCEPT_INVITES else 'Off'}",
+            (
+                f"Auto-accept invites: trusted: {', '.join(self.config.AUTO_ACCEPT_INVITES_FROM)}"
+                if self.config.AUTO_ACCEPT_INVITES_FROM
+                else f"Auto-accept invites: {'On' if self.config.AUTO_ACCEPT_INVITES else 'Off'}"
+            ),
             f"Progress messages: {'On' if self.config.SHOW_PROGRESS_MESSAGES else 'Off'}",
             f"Quiet mode: {'On' if self.config.QUIET_MODE else 'Off'}",
             f"Log file: {self.config.LOG_FILE}",
@@ -1353,11 +1357,19 @@ class IntegratedBot:
                     logger.warning("E2EE: share_group_session failed for %s: %s", room_id, exc)
 
     async def on_invite(self, room: MatrixRoom, event: InviteMemberEvent):
-        if not self.config.AUTO_ACCEPT_INVITES:
+        trusted = self.config.AUTO_ACCEPT_INVITES_FROM
+        if trusted:
+            if event.sender not in trusted:
+                logger.info(
+                    "Ignoring invite from %s to %s (not in auto_accept_invites_from)",
+                    event.sender, room.room_id,
+                )
+                return
+        elif not self.config.AUTO_ACCEPT_INVITES:
             logger.info("Invite received for %s but auto-accept is disabled", room.room_id)
             return
 
-        logger.info(f"Invited to {room.display_name}")
+        logger.info("Invited to %s by %s", room.display_name, event.sender)
         await self.client.join(room.room_id)
         if _E2EE_AVAILABLE:
             joined_room = self.client.rooms.get(room.room_id)

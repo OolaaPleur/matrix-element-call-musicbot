@@ -17,6 +17,7 @@ name = "Music Bot"
 command_prefix = "!m"    # prefix for all bot commands (e.g. "!m play")
 history_limit = 10
 auto_accept_invites = false
+# auto_accept_invites_from = ["@youruser:matrix.org"]  # if set, only accept invites from these users (overrides auto_accept_invites)
 
 [paths]
 audio_dir = "/tmp/musicbot_audio"
