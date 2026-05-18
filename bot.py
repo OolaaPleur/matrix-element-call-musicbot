@@ -52,6 +52,8 @@ _NOISE_RE = re.compile(
     re.IGNORECASE,
 )
 _TOPIC_SUFFIX_RE = re.compile(r"\s*-\s*Topic\s*$", re.IGNORECASE)
+# Per-device call membership: _@localpart:server_deviceId_m.call
+_PER_DEVICE_CALL_STATE_KEY_RE = re.compile(r"^_(@[^:]+:[^_]+)_")
 
 
 def _clean_title(title: str) -> str:
@@ -102,6 +104,7 @@ class IntegratedBot:
 
     def __init__(self, config: Config):
         self.config = config
+        self._prefix = config.COMMAND_PREFIX
         if _E2EE_AVAILABLE:
             _store_dir = Path(__file__).resolve().parent / "data" / "crypto_store"
             _store_dir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +127,7 @@ class IntegratedBot:
             extractor_retries=config.EXTRACTOR_RETRIES,
             download_format=config.AUDIO_DOWNLOAD_FORMAT,
             audio_quality=config.AUDIO_QUALITY,
+            cookies_file=config.YTDLP_COOKIES_FILE,
         )
 
         self._auto_advance_task: Optional[asyncio.Task] = None
@@ -191,12 +195,25 @@ class IntegratedBot:
         if event.source.get("type") != "org.matrix.msc3401.call.member":
             return
         content = event.source.get("content", {})
-        user_id = event.source.get("state_key", "")
-        if not user_id:
+        state_key = event.source.get("state_key", "")
+        if not state_key:
             return
         room_id = room.room_id
-        memberships = content.get("memberships", [])
-        active = any(m.get("application") == "m.call" for m in memberships)
+
+        per_device_match = _PER_DEVICE_CALL_STATE_KEY_RE.match(state_key)
+        if per_device_match:
+            # Per-device format: state_key = _@user:server_deviceId_m.call
+            user_id = per_device_match.group(1)
+            active = content.get("application") == "m.call" and bool(content)
+        else:
+            # Legacy format: state_key = @user:server, content has memberships list
+            user_id = state_key
+            memberships = content.get("memberships", [])
+            active = any(m.get("application") == "m.call" for m in memberships)
+
+        if not user_id:
+            return
+        logger.info("call_member state room=%s user=%s active=%s", room_id, user_id, active)
         if active:
             self._call_participants.setdefault(room_id, set()).add(user_id)
         else:
@@ -205,6 +222,44 @@ class IntegratedBot:
     def get_call_participants(self, room_id: str) -> list[str]:
         participants = self._call_participants.get(room_id, set())
         return [u for u in participants if u != self.client.user_id]
+
+    async def _seed_call_participants_from_state(self):
+        """Populate _call_participants from current room state after initial sync.
+
+        matrix-nio only fires UnknownEvent callbacks for timeline events, not for
+        the state snapshot delivered in the initial sync. This method queries the
+        current state directly so a bot restart doesn't lose participant tracking.
+        """
+        for room_id in list(self.client.rooms):
+            try:
+                resp = await self.client.room_get_state(room_id)
+            except Exception as exc:
+                logger.warning("_seed_call_participants: room_get_state failed for %s: %s", room_id, exc)
+                continue
+            if not hasattr(resp, "events"):
+                continue
+            for evt in resp.events:
+                if evt.get("type") != "org.matrix.msc3401.call.member":
+                    continue
+                content = evt.get("content", {})
+                state_key = evt.get("state_key", "")
+                if not state_key:
+                    continue
+                per_device_match = _PER_DEVICE_CALL_STATE_KEY_RE.match(state_key)
+                if per_device_match:
+                    user_id = per_device_match.group(1)
+                    active = content.get("application") == "m.call" and bool(content)
+                else:
+                    user_id = state_key
+                    memberships = content.get("memberships", [])
+                    active = any(m.get("application") == "m.call" for m in memberships)
+                if not user_id:
+                    continue
+                if active:
+                    self._call_participants.setdefault(room_id, set()).add(user_id)
+                    logger.info("seed call_participants: room=%s user=%s active=True", room_id, user_id)
+                else:
+                    self._call_participants.get(room_id, set()).discard(user_id)
 
     async def _emit_track_finished(self, call_room_id: str, reason: str, played_s: int):
         if self._active_play is None or self._active_play.get("finished"):
@@ -403,34 +458,35 @@ class IntegratedBot:
         return max(0.0, float(duration) - elapsed)
 
     def _help_text(self) -> str:
+        p = self._prefix
         return (
-            "🎵 Commands\n\n"
+            f"🎵 Commands  (prefix: {p})\n\n"
             "Playback\n"
-            "!help (!h) - show this help\n"
-            "!join (!j) - join Element Call in this room\n"
-            "!leave (!lv) - leave current Element Call\n"
-            "!play (!p) <url-or-query> - add track and auto-join call if needed\n"
-            "!queue (!q) - show queue with ETA\n"
-            "!nowplaying (!np) - show current track\n"
-            "!skip (!s) - skip current track\n"
-            "!stop (!x) - stop playback and clear queue\n"
-            "!loop (!lp) - toggle loop mode\n"
-            "!history (!hist) - show recent playback history\n\n"
+            f"{p} help (h) - show this help\n"
+            f"{p} join (j) - join Element Call in this room\n"
+            f"{p} leave (lv) - leave current Element Call\n"
+            f"{p} play (p) <url-or-query> - add track and auto-join call if needed\n"
+            f"{p} queue (q) - show queue with ETA\n"
+            f"{p} nowplaying (np) - show current track\n"
+            f"{p} skip (s) - skip current track\n"
+            f"{p} stop (x) - stop playback and clear queue\n"
+            f"{p} loop (lp) - toggle loop mode\n"
+            f"{p} history (hist) - show recent playback history\n\n"
             "Saved Queues\n"
-            "!save (!sv) <name> [--force] - save current+upcoming queue\n"
-            "!load (!ld) <name> - load a saved queue and auto-join call if needed\n"
-            "!queues (!qs) - list saved queues\n"
-            "!deletequeue (!dq) <name> - delete a saved queue\n"
-            "!renamequeue (!rq) <old> <new> - rename a saved queue\n\n"
+            f"{p} save (sv) <name> [--force] - save current+upcoming queue\n"
+            f"{p} load (ld) <name> - load a saved queue and auto-join call if needed\n"
+            f"{p} queues (qs) - list saved queues\n"
+            f"{p} deletequeue (dq) <name> - delete a saved queue\n"
+            f"{p} renamequeue (rq) <old> <new> - rename a saved queue\n\n"
             "Audio & Info\n"
-            "!audio (!a) - show current audio settings\n"
-            "!normalize (!norm) on|off - toggle normalization\n"
-            "!fadein (!fi) <ms> - set fade-in (0-5000)\n"
-            "!volume (!v) <0-200> - set playback volume percent\n"
-            "!status (!st) - show bot status\n"
-            "!diag (!d) - show diagnostics\n"
-            "!config (!cfg) - show active config\n"
-            "!defaults (!df) - show default config values"
+            f"{p} audio (a) - show current audio settings\n"
+            f"{p} normalize (norm) on|off - toggle normalization\n"
+            f"{p} fadein (fi) <ms> - set fade-in (0-5000)\n"
+            f"{p} volume (v) <0-200> - set playback volume percent\n"
+            f"{p} status (st) - show bot status\n"
+            f"{p} diag (d) - show diagnostics\n"
+            f"{p} config (cfg) - show active config\n"
+            f"{p} defaults (df) - show default config values"
         )
 
     def _safe_config_text(self) -> str:
@@ -624,7 +680,7 @@ class IntegratedBot:
         if isinstance(source_url, str) and self.audio_queue.has_source(source_url):
             await self.send_message(
                 room_id,
-                "ℹ️ That track is already playing or queued. Use `!loop` if you want repeats.",
+                f"ℹ️ That track is already playing or queued. Use `{self._prefix} loop` if you want repeats.",
             )
             return True
 
@@ -637,6 +693,11 @@ class IntegratedBot:
             "source_url": source_url,
             "stream_url": result.get("stream_url"),
             "non_cacheable": True,
+            "artist":   result.get("artist",   ""),
+            "track":    result.get("track",    ""),
+            "album":    result.get("album",    ""),
+            "channel":  result.get("channel",  ""),
+            "uploader": result.get("uploader", ""),
         }
 
         previous_current = self.audio_queue.current
@@ -684,27 +745,35 @@ class IntegratedBot:
             "duration_s": int(track.get("duration") or 0),
             "finished": False,
         }
-        try:
-            await self.client.room_send(
-                room_id=room_id,
-                message_type=EVT_TRACK_STARTED,
-                content={
-                    "play_id": _play_id,
-                    "source": _source,
-                    "source_url": track.get("source_url", ""),
-                    "artist": _artist,
-                    "track": _track_name,
-                    "album": _album,
-                    "duration_s": int(track.get("duration") or 0),
-                    "metadata_quality": _quality,
-                    "started_at": _started_at,
-                    "call_participants": _participants,
-                    "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
-                },
-                ignore_unverified_devices=False,
+        if _artist and _track_name:
+            try:
+                await self.client.room_send(
+                    room_id=room_id,
+                    message_type=EVT_TRACK_STARTED,
+                    content={
+                        "play_id": _play_id,
+                        "source": _source,
+                        "source_url": track.get("source_url", ""),
+                        "artist": _artist,
+                        "track": _track_name,
+                        "album": _album,
+                        "duration_s": int(track.get("duration") or 0),
+                        "metadata_quality": _quality,
+                        "started_at": _started_at,
+                        "call_participants": _participants,
+                        "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
+                    },
+                    ignore_unverified_devices=False,
+                )
+            except Exception as _exc:
+                logger.warning("Failed to emit track_started: %s", _exc)
+        else:
+            logger.info(
+                "Skipping track_started emit: no artist/track metadata (play_id=%s title=%r channel=%r uploader=%r artist=%r track=%r)",
+                _play_id,
+                track.get("title"), track.get("channel"), track.get("uploader"),
+                track.get("artist"), track.get("track"),
             )
-        except Exception as _exc:
-            logger.warning("Failed to emit track_started: %s", _exc)
 
         if self.config.STREAM_PREFETCH_CURRENT and isinstance(source_url, str) and source_url:
             self._stream_prefetch_task = asyncio.create_task(
@@ -817,7 +886,7 @@ class IntegratedBot:
             return True
         await self.send_message(
             room_id,
-            f"ℹ️ Join call first with !join before {command_name}.",
+            f"ℹ️ Join call first with `{self._prefix} join` before `{command_name}`.",
         )
         return False
 
@@ -923,66 +992,46 @@ class IntegratedBot:
         if not remaining_sources:
             return
 
-        semaphore = asyncio.Semaphore(self.config.PLAYLIST_BACKGROUND_LOAD_CONCURRENCY)
-
-        async def load_one(index: int, source_url: str):
-            async with semaphore:
-                ok, result = await self.audio_queue.download_audio(source_url)
-                return index, ok, result
-
-        try:
-            tasks = [asyncio.create_task(load_one(idx, src)) for idx, src in enumerate(remaining_sources)]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        except asyncio.CancelledError:
-            return
-
-        loaded: list[dict] = []
         failures = 0
-        ordered: list[tuple[int, bool, object]] = []
-        for item in results:
-            if isinstance(item, Exception):
-                failures += 1
-                continue
-            if not isinstance(item, tuple) or len(item) != 3:
-                failures += 1
-                continue
-            ordered.append(item)
 
-        ordered.sort(key=lambda x: x[0])
-        for _, ok, result in ordered:
+        for source_url in remaining_sources:
+            # Wait until the queue has no pre-downloaded tracks before fetching next
+            while len(self.audio_queue.queue) >= 1:
+                try:
+                    await asyncio.sleep(2)
+                except asyncio.CancelledError:
+                    return
+
+            if dedupe_existing and self.audio_queue.has_source(source_url):
+                continue
+
+            try:
+                ok, result = await self.audio_queue.download_audio(source_url)
+            except asyncio.CancelledError:
+                return
+
             if not ok or not isinstance(result, dict):
                 failures += 1
                 continue
-            loaded.append(result)
 
-        if not loaded and failures == 0:
-            return
-
-        added = 0
-        skipped_existing = 0
-        async with self._playback_lock:
-            for track in loaded:
-                source_url = track.get("source_url")
-                if dedupe_existing and isinstance(source_url, str) and source_url and self.audio_queue.has_source(source_url):
-                    skipped_existing += 1
+            async with self._playback_lock:
+                src = result.get("source_url")
+                if dedupe_existing and isinstance(src, str) and src and self.audio_queue.has_source(src):
                     continue
                 self.audio_queue.add_to_queue(
-                    track["file"],
-                    track.get("title"),
-                    track.get("duration"),
-                    source_url=source_url,
-                    non_cacheable=bool(track.get("non_cacheable")),
+                    result["file"],
+                    result.get("title"),
+                    result.get("duration"),
+                    source_url=src,
+                    non_cacheable=bool(result.get("non_cacheable")),
+                    artist=result.get("artist", ""),
+                    track=result.get("track", ""),
+                    album=result.get("album", ""),
+                    channel=result.get("channel", ""),
+                    uploader=result.get("uploader", ""),
                 )
-                added += 1
 
-        if added:
-            message = f"✅ Added {added} more from {source_label} `{collection_name}`"
-            if skipped_existing:
-                message += f"\nSkipped already queued: {skipped_existing}"
-            if failures:
-                message += f"\nFailed: {failures}"
-            await self.send_message(room_id, message)
-        elif failures:
+        if failures:
             await self.send_message(room_id, f"⚠️ Failed to load {failures} from {source_label} `{collection_name}`")
 
     async def _on_call_worker_event(self, event: dict):
@@ -1017,7 +1066,7 @@ class IntegratedBot:
         if event_name == "worker_restart_failed":
             if not self._restart_failed_notified:
                 self._restart_failed_notified = True
-                await self.send_message(room_id, "❌ Call worker could not recover. Use !join to reconnect.", priority="critical")
+                await self.send_message(room_id, f"❌ Call worker could not recover. Use `{self._prefix} join` to reconnect.", priority="critical")
             return
 
         if event_name == "worker_heartbeat_timeout":
@@ -1106,7 +1155,7 @@ class IntegratedBot:
             self._current_track_started_at = None
             await self.send_message(
                 room_id,
-                "ℹ️ Playback paused because bot is not joined in this room call. Use `!join`.",
+                f"ℹ️ Playback paused because bot is not joined in this room call. Use `{self._prefix} join`.",
             )
             return
 
@@ -1128,27 +1177,35 @@ class IntegratedBot:
                 "duration_s": int(next_track.get("duration") or 0),
                 "finished": False,
             }
-            try:
-                await self.client.room_send(
-                    room_id=room_id,
-                    message_type=EVT_TRACK_STARTED,
-                    content={
-                        "play_id": _play_id,
-                        "source": _source,
-                        "source_url": next_track.get("source_url", ""),
-                        "artist": _artist,
-                        "track": _track_name,
-                        "album": _album,
-                        "duration_s": int(next_track.get("duration") or 0),
-                        "metadata_quality": _quality,
-                        "started_at": _started_at,
-                        "call_participants": _participants,
-                        "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
-                    },
-                    ignore_unverified_devices=False,
-                )
-            except Exception as _exc:
-                logger.warning("Failed to emit track_started: %s", _exc)
+            if _artist and _track_name:
+                try:
+                    await self.client.room_send(
+                        room_id=room_id,
+                        message_type=EVT_TRACK_STARTED,
+                        content={
+                            "play_id": _play_id,
+                            "source": _source,
+                            "source_url": next_track.get("source_url", ""),
+                            "artist": _artist,
+                            "track": _track_name,
+                            "album": _album,
+                            "duration_s": int(next_track.get("duration") or 0),
+                            "metadata_quality": _quality,
+                            "started_at": _started_at,
+                            "call_participants": _participants,
+                            "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
+                        },
+                        ignore_unverified_devices=False,
+                    )
+                except Exception as _exc:
+                    logger.warning("Failed to emit track_started: %s", _exc)
+            else:
+                logger.info(
+                "Skipping track_started emit: no artist/track metadata (play_id=%s title=%r channel=%r uploader=%r artist=%r track=%r)",
+                _play_id,
+                next_track.get("title"), next_track.get("channel"), next_track.get("uploader"),
+                next_track.get("artist"), next_track.get("track"),
+            )
 
             self._worker_playback_task = asyncio.create_task(
                 self._wait_for_worker_playback(room_id, generation, current_source)
@@ -1312,34 +1369,34 @@ class IntegratedBot:
                     logger.warning("E2EE: share_group_session on invite failed for %s: %s", room.room_id, exc)
         await self.send_message(
             room.room_id,
-            "🎵 Music Bot ready. Use `!help` to see commands.",
+            f"🎵 Music Bot ready. Use `{self._prefix} help` to see commands.",
         )
 
     def _register_command_handlers(self):
         commands = [
-            "!help",
-            "!config",
-            "!defaults",
-            "!join",
-            "!leave",
-            "!play",
-            "!queue",
-            "!nowplaying",
-            "!diag",
-            "!audio",
-            "!normalize",
-            "!fadein",
-            "!volume",
-            "!history",
-            "!save",
-            "!queues",
-            "!deletequeue",
-            "!renamequeue",
-            "!load",
-            "!skip",
-            "!loop",
-            "!stop",
-            "!status",
+            "help",
+            "config",
+            "defaults",
+            "join",
+            "leave",
+            "play",
+            "queue",
+            "nowplaying",
+            "diag",
+            "audio",
+            "normalize",
+            "fadein",
+            "volume",
+            "history",
+            "save",
+            "queues",
+            "deletequeue",
+            "renamequeue",
+            "load",
+            "skip",
+            "loop",
+            "stop",
+            "status",
         ]
         for command_name in commands:
             self._command_handlers[command_name] = (
@@ -1347,57 +1404,60 @@ class IntegratedBot:
             )
 
     async def handle_command(self, room: MatrixRoom, message: str):
-        parts = message.strip().split(maxsplit=1)
+        rest = message.strip()[len(self._prefix):].strip()
+        parts = rest.split(maxsplit=1)
+        if not parts:
+            return
         command = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
 
         aliases = {
-            "!h": "!help",
-            "!j": "!join",
-            "!lv": "!leave",
-            "!p": "!play",
-            "!q": "!queue",
-            "!np": "!nowplaying",
-            "!d": "!diag",
-            "!a": "!audio",
-            "!norm": "!normalize",
-            "!fi": "!fadein",
-            "!v": "!volume",
-            "!hist": "!history",
-            "!s": "!skip",
-            "!lp": "!loop",
-            "!x": "!stop",
-            "!st": "!status",
-            "!sv": "!save",
-            "!ld": "!load",
-            "!qs": "!queues",
-            "!dq": "!deletequeue",
-            "!rq": "!renamequeue",
-            "!cfg": "!config",
-            "!df": "!defaults",
+            "h":    "help",
+            "j":    "join",
+            "lv":   "leave",
+            "p":    "play",
+            "q":    "queue",
+            "np":   "nowplaying",
+            "d":    "diag",
+            "a":    "audio",
+            "norm": "normalize",
+            "fi":   "fadein",
+            "v":    "volume",
+            "hist": "history",
+            "s":    "skip",
+            "lp":   "loop",
+            "x":    "stop",
+            "st":   "status",
+            "sv":   "save",
+            "ld":   "load",
+            "qs":   "queues",
+            "dq":   "deletequeue",
+            "rq":   "renamequeue",
+            "cfg":  "config",
+            "df":   "defaults",
         }
         command = aliases.get(command, command)
         handler = self._command_handlers.get(command)
         if handler is None:
-            await self.send_message(room.room_id, "❓ Unknown command. Use !help", priority="normal")
+            await self.send_message(room.room_id, f"❓ Unknown command. Use `{self._prefix} help`", priority="normal")
             return
         await handler(room, args)
 
     async def _handle_command_internal(self, room: MatrixRoom, command: str, args: str):
 
-        if command == "!help":
+        if command == "help":
             await self.send_message(room.room_id, self._help_text())
             return
 
-        if command == "!config":
+        if command == "config":
             await self.send_message(room.room_id, self._safe_config_text())
             return
 
-        if command == "!defaults":
+        if command == "defaults":
             await self.send_message(room.room_id, self._default_config_text())
             return
 
-        if command == "!join":
+        if command == "join":
             target = args.strip() if args and args.strip().startswith("!") and ":" in args else None
             if target:
                 if self._is_joined_in_room_call(target):
@@ -1415,7 +1475,7 @@ class IntegratedBot:
                 await self._join_call_for_room(room.room_id, announce_if_already_joined=True)
             return
 
-        if command == "!leave":
+        if command == "leave":
             if not self.call_worker.running:
                 await self.send_message(room.room_id, "ℹ️ Not currently in a call")
                 return
@@ -1431,9 +1491,9 @@ class IntegratedBot:
             await self.send_message(room.room_id, "✅ Left Element Call")
             return
 
-        if command == "!play":
+        if command == "play":
             if not args:
-                await self.send_message(room.room_id, "❌ Usage: !play <audio-url-or-query>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} play <audio-url-or-query>")
                 return
 
             call_room_id = self._active_call_room_id(room.room_id)
@@ -1506,6 +1566,11 @@ class IntegratedBot:
                             first_item.get("duration"),
                             source_url=first_item.get("source_url"),
                             non_cacheable=bool(first_item.get("non_cacheable")),
+                            artist=first_item.get("artist", ""),
+                            track=first_item.get("track", ""),
+                            album=first_item.get("album", ""),
+                            channel=first_item.get("channel", ""),
+                            uploader=first_item.get("uploader", ""),
                         )
                         if not had_current:
                             await self._advance_queue(call_room_id, force_next=True)
@@ -1523,9 +1588,8 @@ class IntegratedBot:
                             )
                         )
 
-                    summary = [f"✅ Playlist `{playlist_name}`: added {loaded_count} track"]
-                    if remaining_sources:
-                        summary.append(f"ℹ️ Loading {len(remaining_sources)} more in background")
+                    total_tracks = loaded_count + len(remaining_sources)
+                    summary = [f"✅ Playlist `{playlist_name}`: {total_tracks} track(s), loading one ahead as needed"]
                     if skipped_existing:
                         summary.append(f"Skipped already queued: {skipped_existing}")
                     if over_limit_skipped:
@@ -1559,7 +1623,7 @@ class IntegratedBot:
                 if isinstance(source_url, str) and self.audio_queue.has_source(source_url):
                     await self.send_message(
                         room.room_id,
-                        "ℹ️ That track is already playing or queued. Use `!loop` if you want repeats.",
+                        f"ℹ️ That track is already playing or queued. Use `{self._prefix} loop` if you want repeats.",
                     )
                     return
 
@@ -1573,6 +1637,11 @@ class IntegratedBot:
                         duration,
                         source_url=source_url,
                         non_cacheable=bool(result.get("non_cacheable")),
+                        artist=result.get("artist", ""),
+                        track=result.get("track", ""),
+                        album=result.get("album", ""),
+                        channel=result.get("channel", ""),
+                        uploader=result.get("uploader", ""),
                     )
 
                     if had_current:
@@ -1613,7 +1682,7 @@ class IntegratedBot:
                     await self._advance_queue(call_room_id, force_next=True)
             return
 
-        if command == "!queue":
+        if command == "queue":
             if not self.audio_queue.queue and not self.audio_queue.current:
                 await self.send_message(room.room_id, "ℹ️ Queue empty")
                 return
@@ -1661,7 +1730,7 @@ class IntegratedBot:
             await self.send_message(room.room_id, "\n".join(lines))
             return
 
-        if command == "!nowplaying":
+        if command == "nowplaying":
             if not self.audio_queue.current:
                 await self.send_message(room.room_id, "ℹ️ Nothing is currently playing")
                 return
@@ -1673,7 +1742,7 @@ class IntegratedBot:
             await self.send_message(room.room_id, line)
             return
 
-        if command == "!diag":
+        if command == "diag":
             now = asyncio.get_running_loop().time()
             last_pong = self.call_worker.last_pong_ts
             pong_age = f"{(now - last_pong):.1f}s ago" if last_pong is not None else "never"
@@ -1700,7 +1769,7 @@ class IntegratedBot:
             await self.send_message(room.room_id, "\n".join(lines))
             return
 
-        if command == "!audio":
+        if command == "audio":
             await self.send_message(
                 room.room_id,
                 "🎚️ Audio\n"
@@ -1717,20 +1786,20 @@ class IntegratedBot:
             )
             return
 
-        if command == "!normalize":
+        if command == "normalize":
             value = args.strip().lower()
             if value not in {"on", "off"}:
-                await self.send_message(room.room_id, "❌ Usage: !normalize on|off")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} normalize on|off")
                 return
             self.config.NORMALIZE_AUDIO = value == "on"
             await self._apply_audio_settings_to_worker()
             await self.send_message(room.room_id, f"✅ Normalize audio: {'On' if self.config.NORMALIZE_AUDIO else 'Off'}")
             return
 
-        if command == "!fadein":
+        if command == "fadein":
             raw = args.strip()
             if not raw:
-                await self.send_message(room.room_id, "❌ Usage: !fadein <milliseconds>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} fadein <milliseconds>")
                 return
             ms = self._parse_int_arg(raw)
             if ms is None:
@@ -1744,10 +1813,10 @@ class IntegratedBot:
             await self.send_message(room.room_id, f"✅ Fade-in set to {self.config.FADE_IN_MS}ms")
             return
 
-        if command == "!volume":
+        if command == "volume":
             raw = args.strip()
             if not raw:
-                await self.send_message(room.room_id, "❌ Usage: !volume <0-200>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} volume <0-200>")
                 return
             value = self._parse_int_arg(raw)
             if value is None:
@@ -1764,7 +1833,7 @@ class IntegratedBot:
                 await self.send_message(room.room_id, f"✅ Volume set to {self.config.VOLUME_PERCENT}%")
             return
 
-        if command == "!history":
+        if command == "history":
             history = list(self._play_history_by_room.get(room.room_id, []))
             if not history:
                 await self.send_message(room.room_id, "ℹ️ No playback history yet")
@@ -1780,7 +1849,7 @@ class IntegratedBot:
             await self.send_message(room.room_id, "\n".join(lines))
             return
 
-        if command == "!save":
+        if command == "save":
             tokens = args.strip().split()
             force = False
             if "--force" in tokens:
@@ -1788,13 +1857,13 @@ class IntegratedBot:
                 tokens = [t for t in tokens if t != "--force"]
             name = " ".join(tokens).strip()
             if not name:
-                await self.send_message(room.room_id, "❌ Usage: !save <name> [--force]")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} save <name> [--force]")
                 return
 
             if self.saved_queues.has_queue(room.room_id, name) and not force:
                 await self.send_message(
                     room.room_id,
-                    f"❌ Saved queue `{name}` already exists. Use `!save {name} --force` to overwrite.",
+                    f"❌ Saved queue `{name}` already exists. Use `{self._prefix} save {name} --force` to overwrite.",
                 )
                 return
 
@@ -1838,7 +1907,7 @@ class IntegratedBot:
             await self.send_message(room.room_id, msg)
             return
 
-        if command == "!queues":
+        if command == "queues":
             names = self.saved_queues.list_names(room.room_id)
             if not names:
                 await self.send_message(room.room_id, "📭 No saved queues in this room")
@@ -1854,10 +1923,10 @@ class IntegratedBot:
             await self.send_message(room.room_id, "💾 Saved queues:\n" + "\n".join(entries))
             return
 
-        if command == "!deletequeue":
+        if command == "deletequeue":
             name = args.strip()
             if not name:
-                await self.send_message(room.room_id, "❌ Usage: !deletequeue <name>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} deletequeue <name>")
                 return
             deleted = self.saved_queues.delete_queue(room.room_id, name)
             if not deleted:
@@ -1866,15 +1935,15 @@ class IntegratedBot:
             await self.send_message(room.room_id, f"🗑️ Deleted saved queue `{name}`")
             return
 
-        if command == "!renamequeue":
+        if command == "renamequeue":
             parts = args.strip().split(maxsplit=1)
             if len(parts) != 2:
-                await self.send_message(room.room_id, "❌ Usage: !renamequeue <old> <new>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} renamequeue <old> <new>")
                 return
 
             old_name, new_name = parts[0].strip(), parts[1].strip()
             if not old_name or not new_name:
-                await self.send_message(room.room_id, "❌ Usage: !renamequeue <old> <new>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} renamequeue <old> <new>")
                 return
 
             ok, reason = self.saved_queues.rename_queue(room.room_id, old_name, new_name)
@@ -1891,10 +1960,10 @@ class IntegratedBot:
             await self.send_message(room.room_id, f"✏️ Renamed `{old_name}` to `{new_name}`")
             return
 
-        if command == "!load":
+        if command == "load":
             name = args.strip()
             if not name:
-                await self.send_message(room.room_id, "❌ Usage: !load <name>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} load <name>")
                 return
 
             tracks = self.saved_queues.load_queue(room.room_id, name)
@@ -1948,6 +2017,11 @@ class IntegratedBot:
                     first_item.get("duration"),
                     source_url=first_item.get("source_url"),
                     non_cacheable=bool(first_item.get("non_cacheable")),
+                    artist=first_item.get("artist", ""),
+                    track=first_item.get("track", ""),
+                    album=first_item.get("album", ""),
+                    channel=first_item.get("channel", ""),
+                    uploader=first_item.get("uploader", ""),
                 )
 
                 await self._advance_queue(room.room_id, force_next=True)
@@ -1963,13 +2037,13 @@ class IntegratedBot:
                         source_label="saved queue",
                     )
                 )
-                await self.send_message(room.room_id, f"ℹ️ Loading {len(remaining_sources)} more...")
+                await self.send_message(room.room_id, f"ℹ️ {len(remaining_sources)} more track(s) queued, loading one ahead as needed")
             elif failures:
                 await self.send_message(room.room_id, f"⚠️ Failed: {failures}")
             return
 
-        if command == "!skip":
-            if not await self._require_joined_in_room_call(room.room_id, "!skip"):
+        if command == "skip":
+            if not await self._require_joined_in_room_call(room.room_id, f"{self._prefix} skip"):
                 return
 
             now = time.monotonic()
@@ -1994,8 +2068,8 @@ class IntegratedBot:
                 await self.send_message(room.room_id, "📭 Queue is empty")
             return
 
-        if command == "!loop":
-            if not await self._require_joined_in_room_call(room.room_id, "!loop"):
+        if command == "loop":
+            if not await self._require_joined_in_room_call(room.room_id, f"{self._prefix} loop"):
                 return
 
             loop_status = self.audio_queue.toggle_loop()
@@ -2017,8 +2091,8 @@ class IntegratedBot:
                     )
             return
 
-        if command == "!stop":
-            if not await self._require_joined_in_room_call(room.room_id, "!stop"):
+        if command == "stop":
+            if not await self._require_joined_in_room_call(room.room_id, f"{self._prefix} stop"):
                 return
 
             _call_room = self.call_worker.room_id or room.room_id
@@ -2042,7 +2116,7 @@ class IntegratedBot:
             await self.send_message(room.room_id, "⏹️ Stopped and cleared queue")
             return
 
-        if command == "!status":
+        if command == "status":
             timer_status = (
                 "Active"
                 if self._auto_advance_task and not self._auto_advance_task.done()
@@ -2092,7 +2166,7 @@ class IntegratedBot:
         if event.sender == self.config.MATRIX_USER_ID or not self.first_sync_done:
             return
 
-        if event.body.strip().startswith("!"):
+        if event.body.strip().startswith(self._prefix):
             await self.handle_command(room, event.body)
 
     async def start(self):
@@ -2121,6 +2195,7 @@ class IntegratedBot:
 
         await self.client.sync(timeout=30000, full_state=True)
         self.first_sync_done = True
+        await self._seed_call_participants_from_state()
         await self._setup_e2ee()
         self._start_message_dispatcher()
         self._ensure_advance_watchdog()

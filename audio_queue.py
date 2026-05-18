@@ -40,6 +40,7 @@ class AudioQueue:
         extractor_retries: int = 1,
         download_format: str = "wav",
         audio_quality: str = "best",
+        cookies_file: Optional[str] = None,
     ):
         self.audio_dir = audio_dir
         self.audio_dir.mkdir(parents=True, exist_ok=True)
@@ -66,11 +67,15 @@ class AudioQueue:
         self.audio_quality = str(audio_quality or "best").strip().lower()
         if self.audio_quality not in {"best", "medium", "worst"}:
             self.audio_quality = "best"
+        self.cookies_file = cookies_file or None
 
         # Cache shape: {url: {"file": str, "music_duration": Optional[float]}}
         self.download_cache = {}
         self.search_cache: dict[str, dict] = {}
         self._enforce_size_limit()
+
+    def _cookies_args(self) -> list[str]:
+        return ["--cookies", self.cookies_file] if self.cookies_file else []
 
     def _is_cache_audio_path(self, path: Path) -> bool:
         if not path.is_file():
@@ -298,6 +303,16 @@ class AudioQueue:
         if not raw:
             return raw
 
+        # Prepend https:// when the user omits the scheme (e.g. "youtube.com/watch?v=...")
+        if not raw.startswith(("http://", "https://")) and "/" in raw and not raw.startswith("ytsearch"):
+            candidate = "https://" + raw
+            try:
+                p = urlparse(candidate)
+                if p.scheme in {"http", "https"} and p.netloc and "." in p.netloc:
+                    raw = candidate
+            except Exception:
+                pass
+
         try:
             parsed = urlparse(raw)
         except Exception:
@@ -340,6 +355,7 @@ class AudioQueue:
         is_url = self.looks_like_url(query_or_url)
         target = query_or_url if is_url else f"ytsearch1:{query_or_url}"
         cmd = [dlp_cmd, "--no-playlist", "--dump-single-json", "--extractor-retries", str(self.extractor_retries)]
+        cmd.extend(self._cookies_args())
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
         cmd.append(target)
@@ -442,6 +458,7 @@ class AudioQueue:
             "--extractor-retries",
             str(self.extractor_retries),
         ]
+        cmd.extend(self._cookies_args())
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
         cmd.append(target)
@@ -481,6 +498,7 @@ class AudioQueue:
             "--extractor-retries",
             str(self.extractor_retries),
         ]
+        cmd.extend(self._cookies_args())
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--lazy-playlist", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
         cmd.append(candidate)
@@ -620,6 +638,7 @@ class AudioQueue:
             temp_output,
             source_url,
         ]
+        cmd[1:1] = self._cookies_args()
         if self.search_mode == "fast":
             cmd[1:1] = ["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))]
 
@@ -723,20 +742,30 @@ class AudioQueue:
         duration: Optional[float] = None,
         source_url: Optional[str] = None,
         non_cacheable: bool = False,
+        artist: str = "",
+        track: str = "",
+        album: str = "",
+        channel: str = "",
+        uploader: str = "",
     ):
         """Add a track to queue."""
-        track = {
+        track_entry = {
             "file": audio_file,
             "title": title or os.path.basename(audio_file),
             "duration": duration,
             "source_url": source_url,
             "non_cacheable": bool(non_cacheable),
+            "artist": artist,
+            "track": track,
+            "album": album,
+            "channel": channel,
+            "uploader": uploader,
         }
-        self.queue.append(track)
+        self.queue.append(track_entry)
         if duration is not None:
-            logger.info(f"Added to queue: {track['title']} (duration: {duration:.2f}s)")
+            logger.info(f"Added to queue: {track_entry['title']} (duration: {duration:.2f}s)")
         else:
-            logger.info(f"Added to queue: {track['title']}")
+            logger.info(f"Added to queue: {track_entry['title']}")
 
     def get_next(self) -> Optional[dict]:
         """Pop next track from queue and set current."""

@@ -13,6 +13,7 @@ class Config:
 
     DEFAULTS: dict[str, Any] = {
         "bot.name": "Music Bot",
+        "bot.command_prefix": "!m",
         "bot.history_limit": 10,
         "bot.auto_accept_invites": False,
         "paths.audio_dir": "/tmp/musicbot_audio",
@@ -72,6 +73,10 @@ class Config:
             "bot",
             "auto_accept_invites",
             self.DEFAULTS["bot.auto_accept_invites"],
+        )
+        self.COMMAND_PREFIX = (
+            self._get_str("COMMAND_PREFIX", "bot", "command_prefix", default=self.DEFAULTS["bot.command_prefix"])
+            or self.DEFAULTS["bot.command_prefix"]
         )
         self.AUDIO_DIR = Path(
             self._get_str("AUDIO_DIR", "paths", "audio_dir", default=self.DEFAULTS["paths.audio_dir"])
@@ -192,6 +197,8 @@ class Config:
         self.AUDIO_QUALITY = self.AUDIO_QUALITY.strip().lower()
         if self.AUDIO_QUALITY not in {"best", "medium", "worst"}:
             raise ValueError("AUDIO_QUALITY/audio.audio_quality must be one of: best, medium, worst")
+        _cookies = self._get_str("YTDLP_COOKIES_FILE", "audio", "ytdlp_cookies_file", default="") or ""
+        self.YTDLP_COOKIES_FILE: Optional[str] = _cookies.strip() or None
         self.STREAM_FIRST_IDLE = self._get_bool(
             "STREAM_FIRST_IDLE",
             "audio",
@@ -390,6 +397,7 @@ class Config:
         lines = [
             "⚙️ Default config values",
             f"bot.name = {cls.DEFAULTS['bot.name']}",
+            f"bot.command_prefix = {cls.DEFAULTS['bot.command_prefix']}",
             f"bot.history_limit = {cls.DEFAULTS['bot.history_limit']}",
             f"bot.auto_accept_invites = {str(cls.DEFAULTS['bot.auto_accept_invites']).lower()}",
             f"paths.audio_dir = {cls.DEFAULTS['paths.audio_dir']}",

@@ -14,6 +14,7 @@ access_token = "YOUR_MATRIX_ACCESS_TOKEN"
 # ==============================
 [bot]
 name = "Music Bot"
+command_prefix = "!m"    # prefix for all bot commands (e.g. "!m play")
 history_limit = 10
 auto_accept_invites = false
 
@@ -35,6 +36,7 @@ search_timeout_seconds = 8.0
 extractor_retries = 1
 download_format = "wav" # wav | mp3 | ogg(vorbis) | m4a | opus
 audio_quality = "best" # best | medium | worst
+# ytdlp_cookies_file = "/path/to/cookies.txt"  # optional: pass cookies to yt-dlp for age-restricted/bot-gated content
 stream_first_idle = true
 stream_prefetch_current = true
 stream_retry_to_file_on_fail = true

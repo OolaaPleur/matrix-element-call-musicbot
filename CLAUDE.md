@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A Matrix music bot with Discord-style chat commands (`!play`, `!skip`, `!queue`, etc.) that joins Element Call and streams audio directly into the call via LiveKit. Two-component architecture: a Python bot process and a Node.js call worker subprocess.
+A Matrix music bot with Discord-style chat commands (`!m play`, `!m skip`, `!m queue`, etc.) that joins Element Call and streams audio directly into the call via LiveKit. Two-component architecture: a Python bot process and a Node.js call worker subprocess.
+
+**Command prefix**: default `!m`, configurable via `bot.command_prefix` in `config.toml`. Format is `<prefix> <command> [args]` (e.g. `!m play some song`). The prefix was made configurable so the scrobbler bot's `!fm` commands are ignored cleanly.
 
 ## Running
 
@@ -14,7 +16,8 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 npm ci --prefix call_worker
 cp config/config.example.toml config/config.toml
-# Edit config/config.toml — set matrix.homeserver, matrix.user_id, matrix.access_token
+# The active config is config.toml at the ROOT of the project, NOT config/config.toml.
+# Always edit the root-level config.toml — config/config.toml is just the example template.
 python3 main.py
 ```
 
@@ -26,11 +29,13 @@ docker compose logs -f musicbot
 
 Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test suite exists.
 
+**yt-dlp JS runtime**: yt-dlp 2026.03+ requires a JavaScript runtime for YouTube format extraction. Node.js is already installed for the call worker, so `~/.config/yt-dlp/config` contains `--js-runtimes node` to wire this up system-wide.
+
 ## Architecture
 
 ### Python bot (`bot.py` — `IntegratedBot`)
 - Connects to Matrix via `matrix-nio` (`AsyncClient`), handles E2EE with `SqliteStore`
-- Listens for `!command` messages and dispatches to handlers in `_handle_command_internal`
+- Listens for messages starting with the configured prefix (`!m` by default) and dispatches to handlers in `_handle_command_internal`; command keys are bare words (`"play"`, `"skip"`, etc.) and aliases map short forms (`"p"` → `"play"`)
 - Manages an in-memory `AudioQueue` (current track + deque of upcoming tracks)
 - Drives the Node.js call worker via `CallWorkerProcess`
 - Uses a priority `asyncio.PriorityQueue` for outbound messages: `critical=0`, `normal=1`, `noisy=2`
@@ -58,13 +63,17 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - Stream-first idle: when queue is empty, resolves a stream URL and plays immediately without downloading
 - Stream prefetch: after stream-first play, downloads the file in background for loop support
 - Result dicts include `artist`, `track`, `album`, `channel` from yt-dlp (empty string when absent); consumed by `extract_metadata()` in `bot.py` for scrobbler events
+- `normalize_media_url()` prepends `https://` when the user omits the scheme (e.g. `youtube.com/watch?v=...` → `https://youtube.com/watch?v=...`), so bare-domain URLs are treated as URLs not search queries
 
 ### E2EE + Cross-signing
 - E2EE via `matrix-nio`'s `SqliteStore` in `data/crypto_store/`
 - On startup, `cross_signing.py:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs
 - Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored)
 - Megolm retry: undecryptable events are retried at 3/8/20/60s intervals after requesting room keys
-- Manual user verification: `python scripts/show_cross_signing_fingerprint.py`
+- Device verification: use `/verify <device_id> <ed25519_fingerprint>` in Element as `@oolaa:matrix.org`
+  - `device_id`: `cat data/device_id`
+  - fingerprint: query the server — `curl -s "https://matrix-client.matrix.org/_matrix/client/v3/keys/query" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"device_keys":{"@musicbot-oolaa:matrix.org":["<device_id>"]}}' | python3 -m json.tool`
+  - Or use `python scripts/show_cross_signing_fingerprint.py` for the cross-signing key
 
 ### Configuration (`config.py` — `Config`)
 - Reads from `config.toml` (or path from `CONFIG_FILE` env var) plus env variable overrides
