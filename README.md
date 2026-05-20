@@ -15,6 +15,7 @@ Discord-style music bot UX for Matrix: chat commands (`!m play`, `!m queue`, `!m
 - Built-in diagnostics and runtime status commands
 - Quiet-mode messaging defaults for less chat noise during playback
 - Fast search defaults for quicker `!play` query resolution
+- Full Matrix E2EE support — works in encrypted rooms, commands and messages are end-to-end encrypted
 
 ## Configurable Command Prefix
 
@@ -33,15 +34,16 @@ command_prefix = "!m"   # change to anything, e.g. "!music" or "!dj"
 - `audio.search_mode = "fast"` by default (faster query resolution)
 - `audio.stream_first_idle = true` by default (instant playback start when idle)
 
-## Important
+## E2EE
 
-> [!WARNING]
-> This bot does **not support encrypted calls yet**.
-> If your room/call requires end-to-end encrypted call media, playback will not work yet.
+Matrix room E2EE is **fully supported** — the bot decrypts encrypted commands and encrypts its own messages. Cross-signing is bootstrapped automatically on startup so the bot user shows as verified in Element.
+
+> [!NOTE]
+> The call audio stream is **not** SFrame/E2EE encrypted. The LiveKit Rust SDK (`@livekit/rtc-node`) and browser JS SDK (`livekit-client`) have incompatible key derivation, causing `"maximum ratchet attempts exceeded"` on every audio frame. Since the bot streams public music this has no practical impact. Matrix room messages remain E2EE encrypted regardless.
 
 ## Current Limitations
 
-- No encrypted call media support yet
+- Call audio is not SFrame/E2EE encrypted (LiveKit SDK incompatibility — see above)
 - Single active playback session at a time (no sharding/multi-room playback yet)
 
 ## Companion Scrobbler Bot

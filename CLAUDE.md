@@ -66,6 +66,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - `normalize_media_url()` prepends `https://` when the user omits the scheme (e.g. `youtube.com/watch?v=...` → `https://youtube.com/watch?v=...`), so bare-domain URLs are treated as URLs not search queries
 
 ### E2EE + Cross-signing
+- Matrix room E2EE (chat messages, commands) is **fully supported** via `matrix-nio`. Call audio (LiveKit) is **not** SFrame-encrypted — see the call worker section for why.
 - E2EE via `matrix-nio`'s `SqliteStore` in `data/crypto_store/`
 - On startup, `cross_signing.py:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs
 - Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored)
