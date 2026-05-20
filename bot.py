@@ -12,7 +12,7 @@ import uuid
 from urllib.parse import urlparse
 
 from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText, UnknownEvent
-from cross_signing import ensure_cross_signing
+from matrix_bot_common.cross_signing import ensure_cross_signing
 
 _E2EE_AVAILABLE = False
 try:
