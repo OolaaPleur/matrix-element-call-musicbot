@@ -13,6 +13,7 @@ A Matrix music bot with Discord-style chat commands (`!m play`, `!m skip`, `!m q
 **Direct (development):**
 ```bash
 python3 -m venv venv && source venv/bin/activate
+# ../matrix-element-call-common must be cloned as a sibling directory first
 pip install -r requirements.txt
 npm ci --prefix call_worker
 cp config/config.example.toml config/config.toml
@@ -68,7 +69,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 ### E2EE + Cross-signing
 - Matrix room E2EE (chat messages, commands) is **fully supported** via `matrix-nio`. Call audio (LiveKit) is **not** SFrame-encrypted — see the call worker section for why.
 - E2EE via `matrix-nio`'s `SqliteStore` in `data/crypto_store/`
-- On startup, `cross_signing.py:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs
+- On startup, `matrix_bot_common.cross_signing:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs (from the shared [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) package)
 - Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored)
 - Megolm retry: undecryptable events are retried at 3/8/20/60s intervals after requesting room keys
 - Device verification: use `/verify <device_id> <ed25519_fingerprint>` in Element as `@youruser:matrix.org`

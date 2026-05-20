@@ -208,10 +208,15 @@ Use this only if you want to run directly on the host.
 ### Linux
 
 ```bash
+# Clone this repo and the shared library as siblings
+git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
+git clone https://github.com/OolaaPleur/matrix-element-call-common
+cd matrix-element-call-musicbot
+
 python3 -m venv venv
 source venv/bin/activate
 
-pip install -r requirements.txt
+pip install -r requirements.txt   # resolves ../matrix-element-call-common automatically
 npm ci --prefix call_worker
 
 cp config/config.example.toml config.toml
@@ -222,9 +227,17 @@ python3 main.py
 
 Requires: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp.
 
+> [!NOTE]
+> `requirements.txt` references `../matrix-element-call-common` (the shared library). Both repos must be cloned into the same parent directory for this to resolve correctly.
+
 ### Windows (PowerShell)
 
 ```powershell
+# Clone this repo and the shared library as siblings
+git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
+git clone https://github.com/OolaaPleur/matrix-element-call-common
+Set-Location .\matrix-element-call-musicbot
+
 py -3 -m venv venv
 .\venv\Scripts\Activate.ps1
 
@@ -257,3 +270,5 @@ Then in Matrix room:
 ## Attribution
 
 Forked from [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot).
+
+Shared Matrix bot utilities (cross-signing, E2EE helpers): [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common).
