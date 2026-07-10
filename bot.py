@@ -49,6 +49,7 @@ class IntegratedBot:
             extractor_retries=config.EXTRACTOR_RETRIES,
             download_format=config.AUDIO_DOWNLOAD_FORMAT,
             audio_quality=config.AUDIO_QUALITY,
+            proxy=config.PROXY
         )
 
         self._auto_advance_task: Optional[asyncio.Task] = None
