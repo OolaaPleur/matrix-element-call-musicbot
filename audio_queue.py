@@ -22,6 +22,8 @@ YTDLP_AUDIO_FORMAT_MAP = {
     "opus": "opus",
 }
 
+YTDLP_JS_RUNTIME = ["--js-runtimes", "node"]
+
 
 class AudioQueue:
     """Manages audio download queue with caching and pre-roll silence."""
@@ -348,7 +350,14 @@ class AudioQueue:
         is_url = self.looks_like_url(query_or_url)
         target = query_or_url if is_url else f"ytsearch1:{query_or_url}"
 
-        cmd = [dlp_cmd, "--no-playlist", "--dump-single-json", "--extractor-retries", str(self.extractor_retries)]
+        cmd = [
+            dlp_cmd,
+            "--no-playlist",
+            "--dump-single-json",
+            "--extractor-retries",
+            str(self.extractor_retries),
+            *YTDLP_JS_RUNTIME,            
+        ]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
         cmd.extend(self._yt_dlp_proxy_cla())
@@ -439,6 +448,7 @@ class AudioQueue:
             "--get-url",
             "--extractor-retries",
             str(self.extractor_retries),
+            *YTDLP_JS_RUNTIME,
         ]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
@@ -480,6 +490,7 @@ class AudioQueue:
             "--dump-single-json",
             "--extractor-retries",
             str(self.extractor_retries),
+            *YTDLP_JS_RUNTIME,
         ]
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--lazy-playlist", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
@@ -618,6 +629,7 @@ class AudioQueue:
             "-o",
             temp_output,
             source_url,
+            *YTDLP_JS_RUNTIME,
         ]
         if self.search_mode == "fast":
             cmd[1:1] = ["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))]
