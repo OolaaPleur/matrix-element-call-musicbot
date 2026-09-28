@@ -128,6 +128,7 @@ class IntegratedBot:
             download_format=config.AUDIO_DOWNLOAD_FORMAT,
             audio_quality=config.AUDIO_QUALITY,
             cookies_file=config.YTDLP_COOKIES_FILE,
+            proxy=config.PROXY,
         )
 
         self._auto_advance_task: Optional[asyncio.Task] = None

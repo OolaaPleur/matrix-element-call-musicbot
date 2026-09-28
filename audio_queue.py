@@ -22,6 +22,8 @@ YTDLP_AUDIO_FORMAT_MAP = {
     "opus": "opus",
 }
 
+YTDLP_JS_RUNTIME = ["--js-runtimes", "node"]
+
 
 class AudioQueue:
     """Manages audio download queue with caching and pre-roll silence."""
@@ -41,6 +43,7 @@ class AudioQueue:
         download_format: str = "wav",
         audio_quality: str = "best",
         cookies_file: Optional[str] = None,
+        proxy: str = "",
     ):
         self.audio_dir = audio_dir
         self.audio_dir.mkdir(parents=True, exist_ok=True)
@@ -68,6 +71,7 @@ class AudioQueue:
         if self.audio_quality not in {"best", "medium", "worst"}:
             self.audio_quality = "best"
         self.cookies_file = cookies_file or None
+        self.proxy = proxy
 
         # Cache shape: {url: {"file": str, "music_duration": Optional[float]}}
         self.download_cache = {}
@@ -76,6 +80,11 @@ class AudioQueue:
 
     def _cookies_args(self) -> list[str]:
         return ["--cookies", self.cookies_file] if self.cookies_file else []
+
+    def _yt_dlp_proxy_cla(self) -> list[str]:
+        if self.proxy is None or self.proxy == "":
+            return []
+        return ["--proxy", self.proxy]
 
     def _is_cache_audio_path(self, path: Path) -> bool:
         if not path.is_file():
@@ -354,11 +363,20 @@ class AudioQueue:
     async def _resolve_media_info(self, dlp_cmd: str, query_or_url: str) -> tuple[bool, dict | str]:
         is_url = self.looks_like_url(query_or_url)
         target = query_or_url if is_url else f"ytsearch1:{query_or_url}"
-        cmd = [dlp_cmd, "--no-playlist", "--dump-single-json", "--extractor-retries", str(self.extractor_retries)]
+        cmd = [
+            dlp_cmd,
+            "--no-playlist",
+            "--dump-single-json",
+            "--extractor-retries",
+            str(self.extractor_retries),
+            *YTDLP_JS_RUNTIME,
+        ]
         cmd.extend(self._cookies_args())
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._yt_dlp_proxy_cla())
         cmd.append(target)
+
         code, stdout, stderr = await self._run_command(*cmd)
         if code != 0:
             return False, (stderr.strip() or "Failed to resolve media info")
@@ -457,11 +475,14 @@ class AudioQueue:
             "--get-url",
             "--extractor-retries",
             str(self.extractor_retries),
+            *YTDLP_JS_RUNTIME,
         ]
         cmd.extend(self._cookies_args())
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._yt_dlp_proxy_cla())
         cmd.append(target)
+
         code, stdout, stderr = await self._run_command(*cmd)
         if code != 0:
             return False, (stderr.strip() or "Failed to resolve stream URL")
@@ -497,11 +518,14 @@ class AudioQueue:
             "--dump-single-json",
             "--extractor-retries",
             str(self.extractor_retries),
+            *YTDLP_JS_RUNTIME,
         ]
         cmd.extend(self._cookies_args())
         if self.search_mode == "fast":
             cmd.extend(["--no-warnings", "--lazy-playlist", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))])
+        cmd.extend(self._yt_dlp_proxy_cla())
         cmd.append(candidate)
+
         code, stdout, stderr = await self._run_command(*cmd)
         if code != 0:
             return False, (stderr.strip() or "Failed to resolve playlist metadata")
@@ -627,6 +651,7 @@ class AudioQueue:
 
         cmd = [
             dlp_cmd,
+            *self._yt_dlp_proxy_cla(),
             "-x",
             "--audio-format",
             self.ytdlp_audio_format,
@@ -637,6 +662,7 @@ class AudioQueue:
             "-o",
             temp_output,
             source_url,
+            *YTDLP_JS_RUNTIME,
         ]
         cmd[1:1] = self._cookies_args()
         if self.search_mode == "fast":

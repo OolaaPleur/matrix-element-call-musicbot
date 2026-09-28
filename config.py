@@ -35,6 +35,7 @@ class Config:
         "audio.stream_first_idle": True,
         "audio.stream_prefetch_current": True,
         "audio.stream_retry_to_file_on_fail": True,
+        "audio.proxy": "",
         "worker.max_restart_attempts": 3,
         "worker.heartbeat_interval_seconds": 10.0,
         "worker.skip_cooldown_seconds": 1.0,
@@ -275,6 +276,8 @@ class Config:
             "background_load_concurrency",
             self.DEFAULTS["playlist.background_load_concurrency"],
         )
+        self.PROXY = self._get_str("PROXY", "audio", "proxy", self.DEFAULTS["audio.proxy"])
+
         if self.PLAYLIST_BACKGROUND_LOAD_CONCURRENCY < 1:
             raise ValueError(
                 "PLAYLIST_BACKGROUND_LOAD_CONCURRENCY/playlist.background_load_concurrency must be >= 1"
@@ -437,6 +440,7 @@ class Config:
                 "audio.stream_retry_to_file_on_fail = "
                 f"{str(cls.DEFAULTS['audio.stream_retry_to_file_on_fail']).lower()}"
             ),
+            f"audio.proxy = \"\"",
             f"worker.max_restart_attempts = {cls.DEFAULTS['worker.max_restart_attempts']}",
             f"worker.heartbeat_interval_seconds = {cls.DEFAULTS['worker.heartbeat_interval_seconds']}",
             f"worker.skip_cooldown_seconds = {cls.DEFAULTS['worker.skip_cooldown_seconds']}",
