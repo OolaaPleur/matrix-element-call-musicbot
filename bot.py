@@ -344,7 +344,7 @@ class IntegratedBot:
         if self.config.RICH_FORMATTING and html_body:
             content["format"] = "org.matrix.custom.html"
             content["formatted_body"] = html_body
-        await self.client.room_send(room_id, message_type="m.room.message", content=content)
+        await self.client.room_send(room_id, message_type="m.room.message", content=content, ignore_unverified_devices=True)
 
     def _ensure_advance_watchdog(self):
         if self._advance_watchdog_task and not self._advance_watchdog_task.done():
