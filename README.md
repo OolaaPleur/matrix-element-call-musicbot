@@ -148,6 +148,7 @@ Long-term fix:
 - `!m skip` (`s`) — skip current track
 - `!m stop` (`x`) — stop playback and clear queue
 - `!m loop` (`lp`) — toggle loop mode
+- `!m shuffle` (`sh`, `random`) — shuffle the upcoming tracks (also the not-yet-downloaded rest of a playlist or saved queue)
 - `!m history` (`hist`) — show recent playback history
 
 ### Saved Queues

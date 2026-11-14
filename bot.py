@@ -3,6 +3,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import random
 import re
 import shutil
 import subprocess
@@ -135,6 +136,8 @@ class IntegratedBot:
         self._advance_watchdog_task: Optional[asyncio.Task] = None
         self._worker_playback_task: Optional[asyncio.Task] = None
         self._background_load_task: Optional[asyncio.Task] = None
+        # Sources the background loader hasn't downloaded yet (shared with `shuffle`)
+        self._pending_sources: Optional[deque] = None
         self._stream_prefetch_task: Optional[asyncio.Task] = None
         self._current_room_id: Optional[str] = None
         self._current_track_started_at: Optional[float] = None
@@ -472,6 +475,7 @@ class IntegratedBot:
             f"{p} skip (s) - skip current track\n"
             f"{p} stop (x) - stop playback and clear queue\n"
             f"{p} loop (lp) - toggle loop mode\n"
+            f"{p} shuffle (sh, random) - shuffle the upcoming tracks\n"
             f"{p} history (hist) - show recent playback history\n\n"
             "Saved Queues\n"
             f"{p} save (sv) <name> [--force] - save current+upcoming queue\n"
@@ -906,6 +910,7 @@ class IntegratedBot:
             self._background_load_task.cancel()
             logger.info("Cancelled background queue loader")
         self._background_load_task = None
+        self._pending_sources = None
         self._cancel_stream_prefetch()
 
     async def _wait_for_worker_playback(
@@ -998,8 +1003,11 @@ class IntegratedBot:
             return
 
         failures = 0
+        pending = deque(remaining_sources)
+        self._pending_sources = pending
 
-        for source_url in remaining_sources:
+        while pending:
+            source_url = pending.popleft()
             # Wait until the queue has no pre-downloaded tracks before fetching next
             while len(self.audio_queue.queue) >= 1:
                 try:
@@ -1038,6 +1046,9 @@ class IntegratedBot:
                 if self.audio_queue.current is None:
                     logger.info("Background loader: playback was idle, starting the newly loaded track")
                     await self._advance_queue(room_id, force_next=True)
+
+        if self._pending_sources is pending:
+            self._pending_sources = None
 
         if failures:
             await self.send_message(room_id, f"⚠️ Failed to load {failures} from {source_label} `{collection_name}`")
@@ -1415,6 +1426,7 @@ class IntegratedBot:
             "load",
             "skip",
             "loop",
+            "shuffle",
             "stop",
             "status",
         ]
@@ -1446,6 +1458,9 @@ class IntegratedBot:
             "hist": "history",
             "s":    "skip",
             "lp":   "loop",
+            "sh":   "shuffle",
+            "random": "shuffle",
+            "rnd":  "shuffle",
             "x":    "stop",
             "st":   "status",
             "sv":   "save",
@@ -2086,6 +2101,37 @@ class IntegratedBot:
                     await self._advance_queue(room.room_id, force_next=True, pre_stop=False)
             if queue_empty:
                 await self.send_message(room.room_id, "📭 Queue is empty")
+            return
+
+        if command == "shuffle":
+            async with self._playback_lock:
+                pending = self._pending_sources
+                loader_alive = self._background_load_task is not None and not self._background_load_task.done()
+                if pending is not None and loader_alive:
+                    pool = list(pending)
+                    keep = []
+                    for item in self.audio_queue.queue:
+                        src = item.get("source_url")
+                        if src:
+                            pool.append(src)
+                        else:
+                            keep.append(item)
+                    random.shuffle(pool)
+                    self.audio_queue.queue.clear()
+                    self.audio_queue.queue.extend(keep)
+                    pending.clear()
+                    pending.extend(pool)
+                    total = len(pool) + len(keep)
+                else:
+                    queued = list(self.audio_queue.queue)
+                    random.shuffle(queued)
+                    self.audio_queue.queue.clear()
+                    self.audio_queue.queue.extend(queued)
+                    total = len(queued)
+            if total < 2:
+                await self.send_message(room.room_id, "ℹ️ Nothing to shuffle (fewer than 2 upcoming tracks)")
+            else:
+                await self.send_message(room.room_id, f"🔀 Shuffled {total} upcoming tracks")
             return
 
         if command == "loop":
