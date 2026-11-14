@@ -132,6 +132,14 @@ class CallWorkerProcess:
             payload["title"] = title
         await self._send_command(payload)
 
+    async def pause_playback(self):
+        if self.running:
+            await self._send_command({"type": "pause"})
+
+    async def resume_playback(self):
+        if self.running:
+            await self._send_command({"type": "resume"})
+
     async def stop_playback(self, wait_for_terminal: bool = False, timeout: float = 8.0) -> bool:
         if not self.running:
             return True

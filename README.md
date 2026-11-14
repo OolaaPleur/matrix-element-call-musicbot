@@ -146,6 +146,7 @@ Long-term fix:
 - `!m queue` (`q`) — show queue with ETA
 - `!m nowplaying` (`np`) — show current track
 - `!m skip` (`s`) — skip current track
+- `!m pause` (`ps`) — pause; run it again (or `!m resume`, `rs`) to continue from the same spot
 - `!m stop` (`x`) — stop playback and clear queue
 - `!m loop` (`lp`) — toggle loop mode
 - `!m shuffle` (`sh`, `random`) — shuffle the upcoming tracks (also the not-yet-downloaded rest of a playlist or saved queue)

@@ -409,6 +409,8 @@ class CallWorker {
         this.currentPlaybackToken = 0;
         this.currentFfmpeg = null;
         this.playbackQueue = Promise.resolve();
+        this.paused = false;
+        this.resumeWaiters = [];
         this.currentVolumeGain = normalizeVolumePercent(audioSettings.volumePercent) / 100;
         this.targetVolumeGain = this.currentVolumeGain;
     }
@@ -605,7 +607,7 @@ class CallWorker {
             if (this.currentPlaybackToken !== playbackToken) {
                 return;
             }
-            if (!firstChunkSeen) {
+            if (!firstChunkSeen || this.paused) {
                 return;
             }
             const msSinceFrame = Date.now() - lastFrameAt;
@@ -661,6 +663,13 @@ class CallWorker {
                         logLine(`first non-silent samples observed max_abs=${maxAbs}`);
                     }
 
+                    if (this.paused) {
+                        await this.waitWhilePaused(playbackToken);
+                        lastFrameAt = Date.now();
+                        if (this.currentPlaybackToken !== playbackToken) {
+                            break;
+                        }
+                    }
                     const frame = new AudioFrame(frameData, SAMPLE_RATE, CHANNELS, SAMPLES_PER_FRAME);
                     await this.audioSource.captureFrame(frame);
                     sentFrames += 1;
@@ -752,8 +761,38 @@ class CallWorker {
         }
     }
 
+    pausePlayback() {
+        if (!this.currentFfmpeg || this.paused) {
+            return false;
+        }
+        this.paused = true;
+        logLine("playback paused");
+        return true;
+    }
+
+    resumePlayback() {
+        if (!this.paused) {
+            return false;
+        }
+        this.paused = false;
+        const waiters = this.resumeWaiters;
+        this.resumeWaiters = [];
+        for (const resolve of waiters) {
+            resolve();
+        }
+        logLine("playback resumed");
+        return true;
+    }
+
+    async waitWhilePaused(playbackToken) {
+        while (this.paused && this.currentPlaybackToken === playbackToken) {
+            await new Promise((resolve) => this.resumeWaiters.push(resolve));
+        }
+    }
+
     async stopPlayback() {
         this.currentPlaybackToken += 1;
+        this.resumePlayback();
         const ffmpeg = this.currentFfmpeg;
         if (!ffmpeg || ffmpeg.exitCode !== null || ffmpeg.killed === true) {
             return;
@@ -1007,6 +1046,16 @@ async function main() {
                     fade_in_ms: audioSettings.fadeInMs,
                     volume_percent: audioSettings.volumePercent,
                 });
+                continue;
+            }
+
+            if (command.type === "pause") {
+                emit({ event: "paused", ok: worker.pausePlayback() });
+                continue;
+            }
+
+            if (command.type === "resume") {
+                emit({ event: "resumed", ok: worker.resumePlayback() });
                 continue;
             }
 
