@@ -8,8 +8,8 @@
     "join": "node src/join_call.js"
   },
   "dependencies": {
-    "@livekit/rtc-node": "^0.13.35",
-    "dotenv": "^17.4.2",
-    "matrix-js-sdk": "^41.9.0"
+    "@livekit/rtc-node": "^1.2.2",
+    "dotenv": "^18.0.10",
+    "matrix-js-sdk": "^45.1.0"
   }
 }

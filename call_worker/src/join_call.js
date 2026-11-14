@@ -95,15 +95,21 @@ function shouldFallbackStickyJoin(mode, error) {
 }
 
 function joinRtcSessionWithMode(session, { userId, deviceId, memberId }, livekitTransport, membershipMode) {
-    session.joinRTCSession(
-        { userId, deviceId, memberId },
-        [livekitTransport],
-        livekitTransport,
-        {
-            callIntent: "audio",
-            unstableSendStickyEvents: useStickyMembershipEvents(membershipMode),
-        },
-    );
+    const joinConfig = {
+        callIntent: "audio",
+        unstableSendStickyEvents: useStickyMembershipEvents(membershipMode),
+    };
+    // matrix-js-sdk >= 45: join(identity, publishedTransports, config); older: joinRTCSession(identity, foci, multiSfuFocus, config)
+    if (typeof session.join === "function") {
+        session.join({ userId, deviceId, memberId }, [livekitTransport], joinConfig);
+    } else {
+        session.joinRTCSession({ userId, deviceId, memberId }, [livekitTransport], livekitTransport, joinConfig);
+    }
+}
+
+function leaveRtcSession(session, timeout) {
+    // matrix-js-sdk >= 45 renamed leaveRoomSession() to leave()
+    return typeof session.leave === "function" ? session.leave(timeout) : session.leaveRoomSession(timeout);
 }
 
 const audioSettings = {
@@ -788,7 +794,7 @@ class CallWorker {
             this.livekitRoom = null;
         }
 
-        await this.rtcSession.leaveRoomSession(5_000);
+        await leaveRtcSession(this.rtcSession, 5_000);
     }
 }
 
@@ -905,7 +911,7 @@ async function main() {
         logLine(notice);
 
         try {
-            await session.leaveRoomSession(5_000);
+            await leaveRtcSession(session, 5_000);
         } catch {
             // best effort cleanup before retry
         }
