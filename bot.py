@@ -1035,6 +1035,9 @@ class IntegratedBot:
                     channel=result.get("channel", ""),
                     uploader=result.get("uploader", ""),
                 )
+                if self.audio_queue.current is None:
+                    logger.info("Background loader: playback was idle, starting the newly loaded track")
+                    await self._advance_queue(room_id, force_next=True)
 
         if failures:
             await self.send_message(room_id, f"⚠️ Failed to load {failures} from {source_label} `{collection_name}`")
@@ -1149,7 +1152,11 @@ class IntegratedBot:
 
         if not next_track:
             self._current_track_started_at = None
-            await self.send_message(room_id, "📭 Queue is empty")
+            if self._background_load_task is not None and not self._background_load_task.done():
+                # The background loader is still fetching the next track; it starts playback itself
+                await self.send_message(room_id, "⏳ Loading the next track…")
+            else:
+                await self.send_message(room_id, "📭 Queue is empty")
             return
 
         self._current_room_id = room_id
