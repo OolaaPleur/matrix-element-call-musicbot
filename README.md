@@ -143,6 +143,7 @@ Long-term fix:
 - `!m join` (`j`) — join Element Call in this room
 - `!m leave` (`lv`) — leave current Element Call
 - `!m play` (`p`) `<url-or-query>` — add track and auto-join call if needed
+  - Spotify links (track, album, playlist, artist; `open.spotify.com/...`, `spotify:track:...`, `spotify.link/...`) are looked up on YouTube by artist + title — Spotify audio itself is DRM-protected. Albums/playlists: first 100 tracks; podcasts are not supported.
 - `!m queue` (`q`) — show queue with ETA
 - `!m nowplaying` (`np`) — show current track
 - `!m skip` (`s`) — skip current track

@@ -57,6 +57,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - Exposes `play()`, `play_stream()`, `stop_playback()`, `set_audio_settings()`, `stop()`
 - Auto-restarts on unexpected crash (up to `max_restart_attempts`, exponential backoff)
 - Heartbeat ping/pong every `heartbeat_interval` seconds; kills worker on timeout
+- Failed startup (2026-11-14, after a matrix.org `livekit-jwt` 503): `start()` stops the spawned worker if `joined` never arrives, and `join_call.js`'s fatal handler leaves the MatrixRTC session and calls `process.exit(1)`. Before, `exitCode = 1` alone left the worker alive (the Matrix client keeps the event loop busy), in the call but without LiveKit; `running` stayed true, so every later `play` went to that dead worker and nothing played.
 
 ### Audio pipeline (`audio_queue.py`)
 - Downloads audio via `yt-dlp` (supports URLs and search queries)
@@ -64,6 +65,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - Stream-first idle: when queue is empty, resolves a stream URL and plays immediately without downloading
 - Stream prefetch: after stream-first play, downloads the file in background for loop support
 - Result dicts include `artist`, `track`, `album`, `channel` from yt-dlp (empty string when absent); consumed by `extract_metadata()` in `bot.py` for scrobbler events
+- **Spotify links** (`spotify.py`): yt-dlp can't play Spotify (DRM), so `play` resolves the link first — reads the public embed page `open.spotify.com/embed/<kind>/<id>` (`__NEXT_DATA__` JSON, no API key) and turns each track into a YouTube search query `<first artist> - <title>` (Spotify-only `- … Remaster` suffixes dropped). Track → plain query (stream-first path as usual); album/playlist/artist (top 10) → fed into the existing playlist loader as query strings. Embed pages list at most 100 tracks. Podcasts/audiobooks are refused. If Spotify changes the embed page layout, resolving fails with "nothing found at this link".
 - `normalize_media_url()` prepends `https://` when the user omits the scheme (e.g. `youtube.com/watch?v=...` → `https://youtube.com/watch?v=...`), so bare-domain URLs are treated as URLs not search queries
 
 ### E2EE + Cross-signing

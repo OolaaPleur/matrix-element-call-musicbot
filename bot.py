@@ -26,6 +26,7 @@ from config import Config
 from audio_queue import AudioQueue
 from call_worker_process import CallWorkerProcess
 from saved_queues import SavedQueueStore
+from spotify import SpotifyError, is_spotify_link, resolve_spotify
 
 
 logger = logging.getLogger(__name__)
@@ -1549,7 +1550,31 @@ class IntegratedBot:
 
                 playlist_ok = False
                 playlist_info: dict | None = None
-                if self.audio_queue.looks_like_url(args):
+
+                # Spotify audio is DRM-protected: read title/artists from Spotify,
+                # then search YouTube like a plain text query.
+                if is_spotify_link(args):
+                    try:
+                        spotify_item = await resolve_spotify(args)
+                    except SpotifyError as exc:
+                        await self.send_message(room.room_id, f"❌ Spotify: {exc}")
+                        return
+                    if spotify_item.kind == "track":
+                        spotify_track = spotify_item.tracks[0]
+                        await self.send_message(
+                            room.room_id,
+                            f"🎧 Spotify: {spotify_track.display} — searching YouTube",
+                            priority="noisy",
+                        )
+                        args = spotify_track.query
+                    else:
+                        playlist_ok = True
+                        playlist_info = {
+                            "is_playlist": True,
+                            "title": spotify_item.name,
+                            "entries": [t.query for t in spotify_item.tracks],
+                        }
+                elif self.audio_queue.looks_like_url(args):
                     resolved_ok, resolved = await self.audio_queue.resolve_playlist_entries(args)
                     if resolved_ok and isinstance(resolved, dict) and resolved.get("is_playlist"):
                         playlist_ok = True
