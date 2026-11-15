@@ -496,7 +496,9 @@ class CallWorker {
             );
         }
 
-        const roomOptions = { autoSubscribe: true, dynacast: true };
+        // The bot only publishes music; it never needs other participants' audio,
+        // so don't receive their tracks at all.
+        const roomOptions = { autoSubscribe: false, dynacast: true };
         const room = new Room();
         await room.connect(config.url, config.jwt, roomOptions);
         logLine(`livekit connected auth_mode=${config._auth_mode || "unknown"}`);

@@ -39,7 +39,7 @@ command_prefix = "!m"   # change to anything, e.g. "!music" or "!dj"
 Matrix room E2EE is **fully supported** — the bot decrypts encrypted commands and encrypts its own messages. Cross-signing is bootstrapped automatically on startup so the bot user shows as verified in Element.
 
 > [!NOTE]
-> The call audio stream is **not** SFrame/E2EE encrypted. The LiveKit Rust SDK (`@livekit/rtc-node`) and browser JS SDK (`livekit-client`) have incompatible key derivation, causing `"maximum ratchet attempts exceeded"` on every audio frame. Since the bot streams public music this has no practical impact. Matrix room messages remain E2EE encrypted regardless.
+> The call audio stream is **not** SFrame/E2EE encrypted. The LiveKit Rust SDK (`@livekit/rtc-node`) and browser JS SDK (`livekit-client`) have incompatible key derivation, causing `"maximum ratchet attempts exceeded"` on every audio frame. Since the bot streams public music this has no practical impact. Matrix room messages remain E2EE encrypted regardless. The bot does not subscribe to other participants' tracks (`autoSubscribe: false`), so it never receives anyone's voice.
 
 ## Current Limitations
 

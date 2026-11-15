@@ -71,6 +71,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 
 ### E2EE + Cross-signing
 - Matrix room E2EE (chat messages, commands) is **fully supported** via `matrix-nio`. Call audio (LiveKit) is **not** SFrame-encrypted — see the call worker section for why.
+- The worker connects to LiveKit with `autoSubscribe: false` (since 2026-11-15; was `true`): it only publishes music and never receives other participants' tracks. Humans' audio stays E2EE between their Element clients; the bot's unencrypted track carries only the music.
 - E2EE via `matrix-nio`'s `SqliteStore` in `data/crypto_store/`
 - On startup, `matrix_bot_common.cross_signing:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs (from the shared [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) package)
 - Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored)
