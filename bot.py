@@ -172,7 +172,10 @@ class IntegratedBot:
         self._noisy_cooldown_until: dict[tuple[str, str], float] = {}
         self._message_priority_map = {"critical": 0, "normal": 1, "noisy": 2}
         self._pending_megolm: dict[str, list[tuple[MatrixRoom, MegolmEvent]]] = defaultdict(list)
-        self._call_participants: dict[str, set[str]] = {}
+        # room_id -> {call.member state_key: user_id} for active memberships. Keyed by
+        # state_key because one user has one per-device entry per device; the user
+        # is in the call while any of them is active.
+        self._call_memberships: dict[str, dict[str, str]] = {}
         self._active_play: dict | None = None
         self.call_worker = CallWorkerProcess(
             Path(__file__).resolve().parent,
@@ -232,17 +235,23 @@ class IntegratedBot:
         if not user_id:
             return
         logger.info("call_member state room=%s user=%s active=%s", room_id, user_id, active)
+        self._set_call_membership(room_id, state_key, user_id, active)
+
+    def _set_call_membership(self, room_id: str, state_key: str, user_id: str, active: bool):
+        memberships = self._call_memberships.setdefault(room_id, {})
         if active:
-            self._call_participants.setdefault(room_id, set()).add(user_id)
+            memberships[state_key] = user_id
         else:
-            self._call_participants.get(room_id, set()).discard(user_id)
+            # Only this device's entry: an old empty entry of another device must not
+            # remove a user who is still in the call (seen 2026-11-15).
+            memberships.pop(state_key, None)
 
     def get_call_participants(self, room_id: str) -> list[str]:
-        participants = self._call_participants.get(room_id, set())
+        participants = set(self._call_memberships.get(room_id, {}).values())
         return [u for u in participants if u != self.client.user_id]
 
     async def _seed_call_participants_from_state(self):
-        """Populate _call_participants from current room state after initial sync.
+        """Populate _call_memberships from current room state after initial sync.
 
         matrix-nio only fires UnknownEvent callbacks for timeline events, not for
         the state snapshot delivered in the initial sync. This method queries the
@@ -273,11 +282,9 @@ class IntegratedBot:
                     active = any(m.get("application") == "m.call" for m in memberships)
                 if not user_id:
                     continue
+                self._set_call_membership(room_id, state_key, user_id, active)
                 if active:
-                    self._call_participants.setdefault(room_id, set()).add(user_id)
                     logger.info("seed call_participants: room=%s user=%s active=True", room_id, user_id)
-                else:
-                    self._call_participants.get(room_id, set()).discard(user_id)
 
     async def _emit_track_finished(self, call_room_id: str, reason: str, played_s: int):
         if self._active_play is None or self._active_play.get("finished"):
