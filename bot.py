@@ -93,6 +93,16 @@ def extract_metadata(yt_info: dict) -> tuple[str, str, str, str]:
     return "", "", "", "low"
 
 
+def display_title(track: Optional[dict]) -> str:
+    """'Artist - Track' for chat messages (same metadata the scrobbler gets), else the raw title."""
+    if not isinstance(track, dict):
+        return ""
+    artist, track_name, _album, _quality = extract_metadata(track)
+    if artist and track_name:
+        return f"{artist} - {track_name}"
+    return str(track.get("title") or "")
+
+
 @dataclass(slots=True)
 class OutboundMessage:
     room_id: str
@@ -421,7 +431,7 @@ class IntegratedBot:
     def _format_track_line(cls, prefix: str, track: dict) -> str:
         duration = track.get("duration")
         duration_str = f" [{cls._format_duration(duration)}]" if duration is not None else ""
-        return f"{prefix}{track['title']}{duration_str}"
+        return f"{prefix}{display_title(track)}{duration_str}"
 
     @staticmethod
     def _format_bytes(num_bytes: int) -> str:
@@ -438,7 +448,7 @@ class IntegratedBot:
     def _next_track_title(self) -> Optional[str]:
         if not self.audio_queue.queue:
             return None
-        return self.audio_queue.queue[0]["title"]
+        return display_title(self.audio_queue.queue[0])
 
     @staticmethod
     def _sum_known_durations(tracks: list[dict]) -> Optional[float]:
@@ -748,7 +758,7 @@ class IntegratedBot:
                     self._current_track_started_at = previous_started_at
             return False
 
-        await self.send_message(room_id, f"▶️ Now playing: {title}")
+        await self.send_message(room_id, f"▶️ Now playing: {display_title(track) or title}")
 
         _artist, _track_name, _album, _quality = extract_metadata(track)
         _source = detect_source(track.get("source_url", ""))
@@ -993,7 +1003,7 @@ class IntegratedBot:
                 ok = False
 
         if ok:
-            await self.send_message(room_id, f"▶️ Now playing: {track.get('title')}")
+            await self.send_message(room_id, f"▶️ Now playing: {display_title(track)}")
         else:
             await self.send_message(room_id, "❌ Stream failed and the file fallback did not work either")
         return ok
@@ -1278,7 +1288,7 @@ class IntegratedBot:
             generation, current_source = await self._play_track_in_worker(next_track, pre_stop=pre_stop)
             self._current_track_started_at = asyncio.get_running_loop().time()
             self._push_play_history(room_id, next_track)
-            await self.send_message(room_id, f"▶️ Now playing: {next_track['title']}{loop_indicator}")
+            await self.send_message(room_id, f"▶️ Now playing: {display_title(next_track)}{loop_indicator}")
 
             _artist, _track_name, _album, _quality = extract_metadata(next_track)
             _source = detect_source(next_track.get("source_url", ""))
@@ -1337,7 +1347,7 @@ class IntegratedBot:
                 await self.send_message(room_id, "⚠️ Stream failed. Retrying from cached file...", priority="critical")
                 fallback_ok = await self._retry_stream_track_as_file(room_id, next_track)
                 if fallback_ok:
-                    await self.send_message(room_id, f"▶️ Now playing: {next_track['title']}")
+                    await self.send_message(room_id, f"▶️ Now playing: {display_title(next_track)}")
                     return
             self._current_track_started_at = None
             await self.send_message(room_id, f"❌ Failed to play in call: {exc}")
@@ -1826,7 +1836,7 @@ class IntegratedBot:
                         next_title = self._next_track_title()
                         next_line = f"\nNext: {next_title}" if next_title else ""
                         queued_message = (
-                            f"✅ Queued: {title}\n"
+                            f"✅ Queued: {display_title(self.audio_queue.queue[-1]) or title}\n"
                             f"Position: {len(self.audio_queue.queue)}"
                             f"{eta_line}{next_line}"
                         )
