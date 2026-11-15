@@ -109,7 +109,13 @@ class CallWorkerProcess:
                 await self._stop_locked(clear_desired=False)
 
             await self._spawn_locked(room_id)
-            joined = await self._wait_for_event("joined", timeout=35)
+            try:
+                joined = await self._wait_for_event("joined", timeout=35)
+            except BaseException:
+                # Don't keep a half-started worker: `running` would stay true and
+                # the next play would be sent to a worker that never reached LiveKit.
+                await self._stop_locked(clear_desired=True)
+                raise
             self._state = "joined"
             self._restart_attempts = 0
             logger.info("Call worker joined room %s (%s)", room_id, joined.get("mode", "unknown"))
