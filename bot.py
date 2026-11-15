@@ -246,6 +246,14 @@ class IntegratedBot:
             # remove a user who is still in the call (seen 2026-11-15).
             memberships.pop(state_key, None)
 
+    @staticmethod
+    def _log_emit(kind: str, resp, play_id: str, details: str):
+        """One log line per scrobbler event sent, keyed by play_id like the scrobbler's own log."""
+        if getattr(resp, "event_id", None):
+            logger.info("Emitted %s play_id=%s %s", kind, play_id, details)
+        else:
+            logger.warning("Emit %s play_id=%s failed: %s (%s)", kind, play_id, resp, details)
+
     def get_call_participants(self, room_id: str) -> list[str]:
         participants = set(self._call_memberships.get(room_id, {}).values())
         return [u for u in participants if u != self.client.user_id]
@@ -295,7 +303,7 @@ class IntegratedBot:
         eligible = list(self._active_play["started_participants"] & current)
 
         try:
-            await self.client.room_send(
+            _resp = await self.client.room_send(
                 room_id=call_room_id,
                 message_type=EVT_TRACK_FINISHED,
                 content={
@@ -306,6 +314,10 @@ class IntegratedBot:
                     "eligible_participants": eligible,
                 },
                 ignore_unverified_devices=False,
+            )
+            self._log_emit(
+                "track_finished", _resp, self._active_play["play_id"],
+                f"reason={reason} played_s={int(played_s)} eligible={eligible}",
             )
         except Exception as exc:
             logger.warning("Failed to emit track_finished: %s", exc)
@@ -781,7 +793,7 @@ class IntegratedBot:
         }
         if _artist and _track_name:
             try:
-                await self.client.room_send(
+                _resp = await self.client.room_send(
                     room_id=room_id,
                     message_type=EVT_TRACK_STARTED,
                     content={
@@ -798,6 +810,10 @@ class IntegratedBot:
                         "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
                     },
                     ignore_unverified_devices=False,
+                )
+                self._log_emit(
+                    "track_started", _resp, _play_id,
+                    f"track={_artist} - {_track_name!s} quality={_quality} participants={_participants}",
                 )
             except Exception as _exc:
                 logger.warning("Failed to emit track_started: %s", _exc)
@@ -1311,7 +1327,7 @@ class IntegratedBot:
             }
             if _artist and _track_name:
                 try:
-                    await self.client.room_send(
+                    _resp = await self.client.room_send(
                         room_id=room_id,
                         message_type=EVT_TRACK_STARTED,
                         content={
@@ -1328,6 +1344,10 @@ class IntegratedBot:
                             "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
                         },
                         ignore_unverified_devices=False,
+                    )
+                    self._log_emit(
+                        "track_started", _resp, _play_id,
+                        f"track={_artist} - {_track_name!s} quality={_quality} participants={_participants}",
                     )
                 except Exception as _exc:
                     logger.warning("Failed to emit track_started: %s", _exc)
