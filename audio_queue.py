@@ -75,6 +75,10 @@ class AudioQueue:
 
         # Cache shape: {url: {"file": str, "music_duration": Optional[float]}}
         self.download_cache = {}
+        # One download at a time per query/URL: concurrent downloads of the same
+        # track write the same temp file and both fail (seen with stream prefetch
+        # + stream-failure fallback, 2026-11-15).
+        self._download_locks: dict[str, asyncio.Lock] = {}
         self.search_cache: dict[str, dict] = {}
         self._enforce_size_limit()
 
@@ -571,6 +575,15 @@ class AudioQueue:
         return True, {"is_playlist": True, "title": title, "entries": urls}
 
     async def download_audio(self, query_or_url: str) -> tuple[bool, dict | str]:
+        """Download audio, serialized per query/URL (a second caller gets the cached file)."""
+        key = self.normalize_media_url(query_or_url.strip()).casefold()
+        # Locks are never removed (a few bytes per distinct query): dropping one while
+        # a waiter is about to take it would let a third caller run in parallel.
+        lock = self._download_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            return await self._download_audio_unlocked(query_or_url)
+
+    async def _download_audio_unlocked(self, query_or_url: str) -> tuple[bool, dict | str]:
         """Download audio from URL/search with caching and pre-roll silence.
 
         Returns:

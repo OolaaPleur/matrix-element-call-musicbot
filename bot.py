@@ -921,6 +921,83 @@ class IntegratedBot:
         self._pending_sources = None
         self._cancel_stream_prefetch()
 
+    def _is_retryable_stream_failure(self, track) -> bool:
+        """True if `track` was playing from a stream URL and can still fall back to a file."""
+        return (
+            self.config.STREAM_RETRY_TO_FILE_ON_FAIL
+            and isinstance(track, dict)
+            and isinstance(track.get("stream_url"), str)
+            and track.get("active_source") == track.get("stream_url")
+            and isinstance(track.get("source_url"), str)
+            and bool(track.get("source_url"))
+            and not track.get("stream_file_retry_done")
+        )
+
+    async def _finish_failed_playback(self, room_id: str):
+        """Drop the failed track and move on. Caller holds _playback_lock."""
+        self._current_track_started_at = None
+
+        _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
+        await self._emit_track_finished(room_id, "error", _played_s)
+
+        if self.audio_queue.queue:
+            await self._advance_queue(room_id, force_next=True, pre_stop=False)
+            return
+
+        if self.audio_queue.current is not None:
+            self.audio_queue.current = None
+
+    async def _recover_failed_stream(self, room_id: str, expected_generation: int, track: dict) -> bool:
+        """A stream URL failed after ffmpeg had started (e.g. YouTube 403): play the file instead.
+
+        The stream-first path starts a background download of the same track, so wait
+        for it first; download here only if it isn't there. Returns False if the track
+        still could not be played (the caller then drops it as before).
+        """
+        logger.warning("Stream playback failed, retrying from file: %s", track.get("title"))
+        await self.send_message(room_id, "⚠️ Stream failed. Retrying from cached file...", priority="critical")
+
+        prefetch = self._stream_prefetch_task
+        if prefetch is not None and not prefetch.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(prefetch), timeout=120)
+            except asyncio.TimeoutError:
+                logger.warning("Stream prefetch still running after 120s, downloading again")
+            except Exception:
+                logger.exception("Stream prefetch failed, downloading again")
+
+        ok = False
+        async with self._playback_lock:
+            if expected_generation != self._playback_generation or self.audio_queue.current is not track:
+                logger.info("Ignoring stream fallback (track changed while waiting)")
+                return True
+            try:
+                file_path = track.get("file")
+                if isinstance(file_path, str) and file_path and Path(file_path).is_file():
+                    generation, source_ref = await self._play_track_in_worker(track, pre_stop=False)
+                    self._current_track_started_at = asyncio.get_running_loop().time()
+                    self._worker_playback_task = asyncio.create_task(
+                        self._wait_for_worker_playback(room_id, generation, source_ref)
+                    )
+                    self._arm_auto_advance(
+                        track.get("duration"),
+                        room_id,
+                        expected_generation=generation,
+                        expected_source=source_ref,
+                    )
+                    ok = True
+                else:
+                    ok = await self._retry_stream_track_as_file(room_id, track)
+            except Exception:
+                logger.exception("Stream fallback to file failed")
+                ok = False
+
+        if ok:
+            await self.send_message(room_id, f"▶️ Now playing: {track.get('title')}")
+        else:
+            await self.send_message(room_id, "❌ Stream failed and the file fallback did not work either")
+        return ok
+
     async def _wait_for_worker_playback(
         self,
         room_id: str,
@@ -935,27 +1012,34 @@ class IntegratedBot:
             logger.error(f"Call worker playback error: {exc}")
             if "InvalidState - failed to capture frame" not in str(exc):
                 await self.send_message(room_id, f"❌ Playback worker error: {exc}")
+            stream_retry_track: Optional[dict] = None
             async with self._playback_lock:
                 if expected_generation != self._playback_generation:
                     logger.info("Ignoring playback recovery (generation changed)")
                     return
-                current_source = self._track_source_ref(self.audio_queue.current)
+                current = self.audio_queue.current
+                current_source = self._track_source_ref(current)
                 if expected_source and current_source and current_source != expected_source:
                     logger.info("Ignoring playback recovery (track changed)")
                     return
 
                 self._cancel_auto_advance()
-                self._current_track_started_at = None
-
-                _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
-                await self._emit_track_finished(room_id, "error", _played_s)
-
-                if self.audio_queue.queue:
-                    await self._advance_queue(room_id, force_next=True, pre_stop=False)
+                if self._is_retryable_stream_failure(current):
+                    current["stream_file_retry_done"] = True
+                    stream_retry_track = current
+                else:
+                    await self._finish_failed_playback(room_id)
                     return
 
-                if self.audio_queue.current is not None:
-                    self.audio_queue.current = None
+            # Outside the lock: the stream prefetch needs it to store the file.
+            if await self._recover_failed_stream(room_id, expected_generation, stream_retry_track):
+                return
+            async with self._playback_lock:
+                if (
+                    expected_generation == self._playback_generation
+                    and self.audio_queue.current is stream_retry_track
+                ):
+                    await self._finish_failed_playback(room_id)
             return
 
         if expected_generation != self._playback_generation:
