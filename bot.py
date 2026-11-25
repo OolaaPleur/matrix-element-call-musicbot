@@ -2601,7 +2601,8 @@ class IntegratedBot:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 300)
         finally:
-            # Nothing may start a track while we shut down.
+            # Nothing may start a track (or a worker) while we shut down.
+            self.call_worker.begin_shutdown()
             self._cancel_auto_advance()
             self._cancel_advance_watchdog()
             self._cancel_worker_playback_wait()

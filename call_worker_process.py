@@ -47,6 +47,9 @@ class CallWorkerProcess:
         self._pong_event = asyncio.Event()
 
         self._intentional_stop = False
+        # Set when the bot shuts down: systemd sends SIGTERM to the worker as well,
+        # and its exit must not be "recovered" by spawning a new one.
+        self._shutting_down = False
         self._restart_attempts = 0
         self._max_restart_attempts = max(0, int(max_restart_attempts))
         self._heartbeat_interval = max(1.0, float(heartbeat_interval))
@@ -200,6 +203,9 @@ class CallWorkerProcess:
         }
         await self._send_command(payload)
 
+    def begin_shutdown(self):
+        self._shutting_down = True
+
     async def stop(self):
         async with self._lifecycle_lock:
             self._desired_room_id = None
@@ -299,7 +305,7 @@ class CallWorkerProcess:
             if self._process is not proc:
                 return
 
-            if self._intentional_stop:
+            if self._intentional_stop or self._shutting_down:
                 return
 
             self._state = "error"
