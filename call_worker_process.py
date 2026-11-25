@@ -55,6 +55,9 @@ class CallWorkerProcess:
         self._heartbeat_interval = max(1.0, float(heartbeat_interval))
         self._stop_timeout_restart_threshold = max(1, int(stop_timeout_restart_threshold))
         self._env_overrides = dict(env_overrides or {})
+        # Seconds to wait for the worker's "joined"; E2EE start-up (device check,
+        # rust crypto, cross-signing) needs more than the plain join.
+        self.join_timeout = 35.0
         self._state = "idle"
         self._last_pong_ts: Optional[float] = None
         self._consecutive_stop_timeouts = 0
@@ -118,7 +121,7 @@ class CallWorkerProcess:
 
             await self._spawn_locked(room_id)
             try:
-                joined = await self._wait_for_event("joined", timeout=35)
+                joined = await self._wait_for_event("joined", timeout=self.join_timeout)
             except BaseException:
                 # Don't keep a half-started worker: `running` would stay true and
                 # the next play would be sent to a worker that never reached LiveKit.
@@ -339,7 +342,7 @@ class CallWorkerProcess:
 
                 self._intentional_stop = False
                 await self._spawn_locked(room_id)
-                await self._wait_for_event("joined", timeout=35)
+                await self._wait_for_event("joined", timeout=self.join_timeout)
                 self._state = "joined"
                 self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
                 await self._dispatch_event({"event": "worker_restarted", "attempt": self._restart_attempts})
@@ -364,7 +367,7 @@ class CallWorkerProcess:
 
             try:
                 await self._spawn_locked(room_id)
-                await self._wait_for_event("joined", timeout=35)
+                await self._wait_for_event("joined", timeout=self.join_timeout)
                 self._state = "joined"
                 self._restart_attempts = 0
                 self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())

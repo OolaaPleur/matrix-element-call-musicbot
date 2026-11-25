@@ -317,6 +317,7 @@ async function fetchWhoAmI(baseUrl, accessToken) {
     const response = await fetch(`${baseUrl}/_matrix/client/v3/account/whoami`, {
         method: "GET",
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
         throw new Error(`whoami failed: ${response.status} ${response.statusText}`);
@@ -978,7 +979,15 @@ async function loadE2eeSetup(homeserver, userId) {
     // Until main() installs its own handlers: a stop during startup must not
     // lose a just-created Olm account.
     const earlyExit = () => {
-        void cryptoStore.flush().catch(() => {}).finally(() => process.exit(0));
+        // Once the MatrixRTC session exists, leave it too (no ghost membership).
+        const cleanup = fatalCleanup
+            ? Promise.race([fatalCleanup(), new Promise((resolve) => setTimeout(resolve, 8_000))])
+            : Promise.resolve();
+        void cleanup
+            .catch(() => {})
+            .then(() => cryptoStore.flush())
+            .catch(() => {})
+            .finally(() => process.exit(0));
     };
     process.once("SIGTERM", earlyExit);
     process.once("SIGINT", earlyExit);

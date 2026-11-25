@@ -53,6 +53,14 @@ try {
     assert.strictEqual(second.ed25519, first.ed25519, "same device identity after restart");
     console.log(`ok   identity kept across restarts (${second.restored} databases, ${fs.statSync(file).size} bytes)`);
 
+    const v8 = require("v8");
+    const legacy = v8.deserialize(fs.readFileSync(file));
+    delete legacy.deviceId;
+    fs.writeFileSync(file, v8.serialize(legacy));
+    const adopted = run();
+    assert.strictEqual(adopted.ed25519, first.ed25519, "snapshot without deviceId adopted");
+    console.log("ok   snapshot from before the device binding adopted");
+
     const other = run("OTHERDEVICE");
     assert.strictEqual(other.restored, 0, "another device's snapshot is not restored");
     assert.notStrictEqual(other.ed25519, first.ed25519);

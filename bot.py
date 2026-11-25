@@ -203,6 +203,8 @@ class IntegratedBot:
                 "WORKER_CROSS_SIGNING_KEYS_FILE": str(_DATA_DIR / "cross_signing_keys.json"),
             },
         )
+        if config.WORKER_E2EE:
+            self.call_worker.join_timeout = 120.0
         self.call_worker.set_event_handler(self._on_call_worker_event)
         self.saved_queues = SavedQueueStore(config.SAVED_QUEUES_FILE)
         self.translations = Translations(Path(__file__).resolve().parent / "locales", Path(__file__).resolve().parent / "locales" / "custom")

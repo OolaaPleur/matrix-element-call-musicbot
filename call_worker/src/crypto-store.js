@@ -116,7 +116,8 @@ class PersistentCryptoStore {
         }
         let restored = 0;
         const snapshot = this.readSnapshot(unreadable);
-        if (snapshot && snapshot.deviceId !== this.deviceId) {
+        // Snapshots from before the device binding have no deviceId: adopt them.
+        if (snapshot && snapshot.deviceId && snapshot.deviceId !== this.deviceId) {
             const aside = `${this.file}.device-${snapshot.deviceId}`;
             fs.renameSync(this.file, aside);
             this.logLine(`crypto store: snapshot is for device ${snapshot.deviceId}, not ${this.deviceId}; moved to ${aside}, starting fresh`);
@@ -138,7 +139,7 @@ class PersistentCryptoStore {
         } catch (err) {
             snapshot = { error: err instanceof Error ? err.message : String(err) };
         }
-        if (snapshot?.format !== SNAPSHOT_FORMAT || !Array.isArray(snapshot.databases) || !snapshot.deviceId) {
+        if (snapshot?.format !== SNAPSHOT_FORMAT || !Array.isArray(snapshot.databases)) {
             fs.renameSync(this.file, unreadable);
             throw new UnreadableCryptoStoreError(
                 `cannot read crypto store snapshot ${this.file} (${snapshot?.error || "unknown format"}); moved to ${unreadable}`,
