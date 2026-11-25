@@ -1,9 +1,10 @@
 services:
   musicbot:
-    # Built from this checkout (`docker compose up -d --build`). To use the
-    # image CI publishes instead, drop `build` and run `docker compose pull`.
-    build: .
+    # The image CI publishes for every push to main. To build from this
+    # checkout instead (e.g. with your own changes), uncomment `build` and run
+    # `docker compose up -d --build`.
     image: ghcr.io/oolaapleur/matrix-element-call-musicbot:latest
+    # build: .
     container_name: musicbot
     restart: unless-stopped
     environment:

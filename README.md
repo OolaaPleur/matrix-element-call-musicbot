@@ -273,7 +273,7 @@ Back up while the bot is stopped: `crypto_store/` is an SQLite database, a copy 
 
 ## Docker
 
-Only this repository is needed: the image fetches the shared library from GitHub while it builds.
+The bot runs from the prebuilt image `ghcr.io/oolaapleur/matrix-element-call-musicbot`, published by CI for every change; the clone is only for `docker-compose.yml` and the example config.
 
 ### Linux
 
@@ -288,7 +288,7 @@ nano config/config.toml          # set homeserver, user_id, access_token
 chmod 600 config/config.toml
 sudo chown 10001 config/config.toml
 
-docker compose up -d --build     # build the image and start the bot
+docker compose up -d             # download the image and start the bot
 docker compose logs -f           # watch it start (Ctrl+C to stop watching)
 ```
 
@@ -296,7 +296,8 @@ Update to the latest version:
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 ### Windows (PowerShell)
@@ -311,7 +312,7 @@ Set-Location .\matrix-element-call-musicbot
 Copy-Item .\config\config.example.toml .\config\config.toml
 notepad .\config\config.toml     # set homeserver, user_id, access_token
 
-docker compose up -d --build
+docker compose up -d
 docker compose logs -f
 ```
 
@@ -319,7 +320,7 @@ docker compose logs -f
 
 - Bot data (crypto stores, saved queues, room languages) is kept in the `musicbot_data` volume; see [Data and Backups](#data-and-backups).
 - Call audio E2EE: create the worker device as shown in [Call audio E2EE](#call-audio-e2ee-optional); the image already has the rtc-node fix.
-- CI also publishes the image as `ghcr.io/oolaapleur/matrix-element-call-musicbot`.
+- Build it yourself (e.g. with your own changes): uncomment `build: .` in `docker-compose.yml` and run `docker compose up -d --build`; the build fetches the shared library from GitHub, so no second clone is needed.
 
 ## Run Without Docker (Raw)
 
