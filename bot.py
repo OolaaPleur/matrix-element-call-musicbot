@@ -2587,11 +2587,9 @@ class IntegratedBot:
             while True:
                 started = time.monotonic()
                 try:
-                    await self.client.sync_forever(
-                        timeout=30000,
-                        full_state=False,
-                        loop_sleep_time=5000,
-                    )
+                    # No sleep between syncs: the long poll (timeout) already waits for
+                    # events. A 5 s loop_sleep_time used to delay every command by up to 5 s.
+                    await self.client.sync_forever(timeout=30000, full_state=False)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
