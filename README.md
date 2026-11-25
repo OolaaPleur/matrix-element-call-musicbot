@@ -2,7 +2,7 @@
 
 Discord-style music bot UX for Matrix: chat commands (`!m play`, `!m queue`, `!m skip`, etc.) plus real playback in Element Call.
 
-Based on [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot); this fork adds Matrix room E2EE, cross-signing, scrobbler events, an updated call worker and more.
+Originally based on [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot); this version adds Matrix room and call audio E2EE, cross-signing, search, translations, scrobbler events, an updated call worker and more.
 
 Related projects:
 - [matrix-element-call-scrobbler](https://github.com/OolaaPleur/matrix-element-call-scrobbler) — scrobbles what this bot plays to Last.fm for everyone in the call
@@ -11,17 +11,19 @@ Related projects:
 ## Features
 
 - Discord-style chat command workflow in Matrix rooms
-- Joins Element Call and plays audio directly in call
-- URL or search-based playback with queue and ETA
-- Playlists supported
+- Joins Element Call and plays audio directly in call, stereo with a configurable Opus bitrate
+- URL or search-based playback with queue and ETA; `search` lists results to pick from, `playnext` jumps the queue
+- YouTube / YouTube Music playlists and channels, loaded one track ahead; `queue` lists the tracks not loaded yet
+- Spotify links, played by looking the tracks up on YouTube
 - Saved queue presets (`save`, `load`, `rename`, `delete`)
 - Playback history and now-playing visibility
-- Audio controls (volume, fade-in, normalization)
+- Audio controls (logarithmic volume, fade-in, normalization)
 - Configurable download format (`wav`, `mp3`, `ogg`, `m4a`, `opus`)
 - Built-in diagnostics and runtime status commands
-- Quiet-mode messaging defaults for less chat noise during playback
-- Fast search defaults for quicker `!play` query resolution
+- Chat messages in English or Russian (per room), plus your own translations
 - Full Matrix E2EE support — works in encrypted rooms, commands and messages are end-to-end encrypted
+- Optional call audio E2EE, like Element Call's own
+- Optional track events for a companion Last.fm scrobbler bot
 
 ## Configurable Command Prefix
 
@@ -34,11 +36,23 @@ To change the prefix, set in `config.toml`:
 command_prefix = "!m"   # change to anything, e.g. "!music" or "!dj"
 ```
 
-## Performance Defaults
+## Configuration Highlights
 
-- `ui.quiet_mode = true` by default (suppresses non-critical chatter)
-- `audio.search_mode = "fast"` by default (faster query resolution)
-- `audio.stream_first_idle = true` by default (instant playback start when idle)
+Every setting is listed with its default in [`config/config.example.toml`](config/config.example.toml) (`!m defaults` shows them too, `!m config` the active values). The ones you are most likely to touch:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `bot.language` | `"en"` | Language of the bot's messages; `!m lang` overrides it per room (see [Languages](#languages)) |
+| `bot.scrobbler_events` | `false` | Track events for the [scrobbler bot](#companion-scrobbler-bot) |
+| `audio.volume_percent` | `100` | Start volume, 0–200 (logarithmic up to 100) |
+| `audio.ytdlp_cookies_file` | unset | Cookies for yt-dlp when YouTube asks to sign in (see [Troubleshooting](#troubleshooting)) |
+| `audio.proxy` | `""` | Proxy for yt-dlp |
+| `audio.search_mode` | `"fast"` | `fast`: short network timeouts and search results cached in memory (the same query plays the same track without asking YouTube again); `accurate`: always asks again, no short timeouts |
+| `audio.stream_first_idle` | `true` | When nothing is playing, start streaming the track right away instead of downloading it first; the file is fetched in the background (`stream_prefetch_current`) and used if the stream fails (`stream_retry_to_file_on_fail`) |
+| `worker.stereo` | `false` | Two-channel audio in the call (music rather than voice) |
+| `worker.audio_bitrate_kbps` | `0` | Opus bitrate, e.g. `128`; `0` = LiveKit's default |
+| `worker.e2ee` | `false` | [Call audio E2EE](#call-audio-e2ee-optional) |
+| `ui.quiet_mode` | `true` | Drop progress chatter ("Searching…", "Downloading…", "Skipping…"); answers and errors are always sent |
 
 ## E2EE
 
@@ -158,6 +172,25 @@ Long-term fix:
 
 - Upgrade your homeserver/call stack to support MatrixRTC sticky events, then use `matrix2_auto`.
 
+### "Sign in to confirm you're not a bot" from YouTube
+
+YouTube wants a signed-in session from your server's IP. Export cookies of a YouTube session from your browser in Netscape format (e.g. with a "cookies.txt" extension), point `audio.ytdlp_cookies_file` at the file and restart. If yt-dlp later says the cookies are no longer valid, export them again (or comment the setting out to play without them).
+
+### Replies take several seconds
+
+Usually the homeserver's rate limit (`429` in the log): every message and event the bot sends counts. Turn `bot.scrobbler_events` off if you don't run the scrobbler bot; with `ui.quiet_mode = true` (the default) the bot also skips progress messages.
+
+### "e2ee OFF, playing unencrypted"
+
+The worker log says why, the room gets a one-line notice:
+
+| Reason | Fix |
+|---|---|
+| no `data/worker_device.json` | run `scripts/create_worker_device.py` |
+| rtc-node not patched | `python3 call_worker/patches/apply-pr768.py` after `bun install` |
+| device token rejected (401) or belongs to another device | `scripts/create_worker_device.py --replace` |
+| crypto store unreadable (`worker_crypto_store.v8.unreadable` exists) | `scripts/create_worker_device.py --replace` |
+
 ## Demo
 
 <p align="center">
@@ -182,7 +215,10 @@ Long-term fix:
 - `!m leave` (`lv`) — leave current Element Call
 - `!m play` (`p`) `<url-or-query>` — add track and auto-join call if needed
   - Spotify links (track, album, playlist, artist; `open.spotify.com/...`, `spotify:track:...`, `spotify.link/...`) are looked up on YouTube by artist + title — Spotify audio itself is DRM-protected. Albums/playlists: first 100 tracks; podcasts are not supported.
-- `!m queue` (`q`) — show queue with ETA
+- `!m playnext` (`pn`, `next`) `<url-or-query>` — add a single track to the front of the queue
+- `!m search` (`sr`, `find`) `<query>` — list the top 5 YouTube results; then `!m play <n>` or `!m playnext <n>` (for 5 minutes)
+- `!m queue` (`q`) — show queue with ETA, and the playlist tracks not loaded yet
+- `!m remove` (`rm`) `<n>` — remove track n from the queue
 - `!m nowplaying` (`np`) — show current track
 - `!m skip` (`s`) — skip current track
 - `!m pause` (`ps`) — pause; run it again (or `!m resume`, `rs`) to continue from the same spot
@@ -211,17 +247,42 @@ Long-term fix:
 - `!m config` (`cfg`) — show active config
 - `!m defaults` (`df`) — show default config values
 
+## Languages
+
+The bot's messages come from `locales/<code>.toml` (`en` is the complete reference, `ru` ships too). `[bot] language` in `config.toml` is the default; `!m lang <code>` sets the language of one room (`!m lang default` goes back to the config default).
+
+To change some messages, edit `locales/custom/en.toml` or `locales/custom/ru.toml`: they list every message commented out; uncomment a line, change the text, restart. Your own translations go into `locales/custom/<code>.toml` too: a new language (copy `locales/en.toml`, set `language_name`, translate), or a few keys overriding a shipped one. Keys you leave out, and translations with a placeholder the bot doesn't know, fall back to English (with a warning in the log). Plural forms are tables keyed by `count`: `{ one = "…", other = "…" }`, Russian `{ one, few, many }`.
+
+## Data and Backups
+
+Everything the bot keeps lives in `data/` (the `musicbot_data` volume with Docker). Back it up; the crypto files can't be recreated without side effects:
+
+| File | What it is | If it's lost |
+|---|---|---|
+| `crypto_store/` | The bot device's E2EE keys (matrix-nio) | The bot can't decrypt older messages; log in again as a new device |
+| `cross_signing_keys.json` | Private cross-signing keys | The bot resets cross-signing on the next start; users have to verify it again |
+| `device_id` | The bot's device ID | Used by `rotate_access_token.py` and as a fallback at start |
+| `worker_device.json`, `worker_crypto_store.v8` | The call worker's device and its E2EE keys | No call audio E2EE until `create_worker_device.py --replace` |
+| `saved_queues.json`, `room_languages.json` | Saved queues, per-room languages | Gone, nothing else breaks |
+
+Back up while the bot is stopped: `crypto_store/` is an SQLite database, a copy taken mid-write may not open. Restoring one device's crypto store into a second running copy of the bot breaks E2EE for both: never run two copies with the same access token.
+
+### Rotating the access token
+
+`scripts/rotate_access_token.py` logs in with the password and the same device ID, so the old token stops working while the device and its keys stay. It writes the new token into `config.toml` (never prints it) and restarts the `matrix-musicbot` systemd user service; with Docker, put the token into `config/config.toml` yourself and restart the container.
+
 ## Docker
 
 `docker compose up -d --build` builds the image from this checkout. CI also publishes it as `ghcr.io/oolaapleur/matrix-element-call-musicbot` (`latest`, version tag, commit SHA); to use that instead, remove `build: .` from `docker-compose.yml` and run `docker compose pull`. Bot data (crypto stores, saved queues, room languages) lives in the `musicbot_data` volume.
-The bot runs as uid 10001 in the container, so `config/config.toml` must be readable by it (e.g. `chmod 644`, or `chown 10001` with `chmod 600` since it holds the access token).
+The bot runs as uid 10001 in the container, so `config/config.toml` must be readable by it. It holds the access token: prefer `sudo chown 10001 config/config.toml && chmod 600 config/config.toml` over making it world-readable.
+
+The image installs the shared library from GitHub, so only this repository is needed.
 
 ### Linux
 
 ```bash
-# 1) Download and extract release source
-# 2) Enter extracted folder
-cd musicbot
+git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
+cd matrix-element-call-musicbot
 
 mkdir -p config
 cp config/config.example.toml config/config.toml
@@ -232,10 +293,12 @@ docker compose up -d --build
 
 ### Windows (PowerShell)
 
+> [!WARNING]
+> Not tested on Windows. The commands below should work, but nobody has run them yet; reports welcome.
+
 ```powershell
-# 1) Download and extract release source
-# 2) Enter extracted folder
-Set-Location .\musicbot
+git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
+Set-Location .\matrix-element-call-musicbot
 
 New-Item -ItemType Directory -Path .\config -Force | Out-Null
 Copy-Item .\config\config.example.toml .\config\config.toml
@@ -261,7 +324,7 @@ source venv/bin/activate
 
 pip install -r requirements.txt   # resolves ../matrix-element-call-common automatically
 bun install --cwd call_worker --frozen-lockfile
-python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see below
+python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see "Call audio E2EE"
 
 cp config/config.example.toml config.toml
 # Edit config.toml
@@ -274,7 +337,34 @@ Requires: Python 3.11+, Node.js 22+, Bun (installs the call worker's dependencie
 > [!NOTE]
 > `requirements.txt` references `../matrix-element-call-common` (the shared library). Both repos must be cloned into the same parent directory for this to resolve correctly.
 
+To keep it running, a systemd user service (`~/.config/systemd/user/matrix-musicbot.service`, the name `rotate_access_token.py` restarts):
+
+```ini
+[Unit]
+Description=Matrix Element Call musicbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/matrix-element-call-musicbot
+ExecStart=%h/matrix-element-call-musicbot/venv/bin/python main.py
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable --now matrix-musicbot
+loginctl enable-linger "$USER"   # keep it running while you're logged out
+```
+
 ### Windows (PowerShell)
+
+> [!WARNING]
+> Not tested on Windows. The commands below should work, but nobody has run them yet; reports welcome.
 
 ```powershell
 # Clone this repo and the shared library as siblings
@@ -287,7 +377,7 @@ py -3 -m venv venv
 
 pip install -r requirements.txt
 bun install --cwd call_worker --frozen-lockfile
-python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see below
+python call_worker/patches/apply-pr768.py    # rtc-node fix for call audio E2EE, see "Call audio E2EE"
 
 Copy-Item .\config\config.example.toml .\config.toml
 # Edit .\config.toml
@@ -295,7 +385,7 @@ Copy-Item .\config\config.example.toml .\config.toml
 python .\main.py
 ```
 
-Requires: Python 3.11+, Node.js 22+, Bun (installs the call worker's dependencies), ffmpeg, yt-dlp.(available in PATH).
+Requires: Python 3.11+, Node.js 22+, Bun (installs the call worker's dependencies), ffmpeg, yt-dlp (all in PATH).
 
 ## Basic Verification
 
@@ -318,8 +408,3 @@ Forked from [SultanAlburaq/matrix-element-call-musicbot](https://github.com/Sult
 
 Shared Matrix bot utilities (cross-signing, E2EE helpers): [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common).
 
-## Languages
-
-The bot's messages come from `locales/<code>.toml` (`en` is the complete reference, `ru` ships too). `[bot] language` in `config.toml` is the default; `!m lang <code>` sets the language of one room (`!m lang default` goes back to the config default).
-
-To change some messages, edit `locales/custom/en.toml` or `locales/custom/ru.toml`: they list every message commented out; uncomment a line, change the text, restart. Your own translations go into `locales/custom/<code>.toml` too: a new language (copy `locales/en.toml`, set `language_name`, translate), or a few keys overriding a shipped one. Keys you leave out, and translations with a placeholder the bot doesn't know, fall back to English (with a warning in the log). Plural forms are tables keyed by `count`: `{ one = "…", other = "…" }`, Russian `{ one, few, many }`.
