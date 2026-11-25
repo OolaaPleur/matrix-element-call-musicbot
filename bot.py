@@ -50,6 +50,8 @@ _TOPIC_SUFFIX_RE = re.compile(r"\s*-\s*Topic\s*$", re.IGNORECASE)
 # Per-device call membership: _@localpart:server_deviceId_m.call
 _PER_DEVICE_CALL_STATE_KEY_RE = re.compile(r"^_(@[^:]+:[^_]+)_")
 _DATA_DIR = Path(__file__).resolve().parent / "data"
+SEARCH_RESULTS = 5
+SEARCH_RESULTS_TTL = 300  # seconds `play <n>` refers to the last search
 
 
 def _clean_title(title: str) -> str:
@@ -173,6 +175,8 @@ class IntegratedBot:
         self._emit_queue: asyncio.Queue[tuple[str, str, dict, str]] = asyncio.Queue()
         self._emit_task: Optional[asyncio.Task] = None
         self._command_tasks: set[asyncio.Task] = set()
+        # room_id -> (monotonic time, result URLs) of the last `search`, for `play <n>`.
+        self._search_results: dict[str, tuple[float, list[str]]] = {}
         self.call_worker = CallWorkerProcess(
             Path(__file__).resolve().parent,
             max_restart_attempts=config.WORKER_MAX_RESTART_ATTEMPTS,
@@ -575,7 +579,10 @@ class IntegratedBot:
             f"{p} join (j) - join Element Call in this room\n"
             f"{p} leave (lv) - leave current Element Call\n"
             f"{p} play (p) <url-or-query> - add track and auto-join call if needed\n"
+            f"{p} playnext (pn) <url-or-query> - add track to the front of the queue\n"
+            f"{p} search (sr) <query> - show {SEARCH_RESULTS} results; then {p} play <n> / {p} playnext <n>\n"
             f"{p} queue (q) - show queue with ETA\n"
+            f"{p} remove (rm) <n> - remove track n of the queue\n"
             f"{p} nowplaying (np) - show current track\n"
             f"{p} skip (s) - skip current track\n"
             f"{p} pause (ps) - pause; again to resume\n"
@@ -1561,6 +1568,9 @@ class IntegratedBot:
             "join",
             "leave",
             "play",
+            "playnext",
+            "search",
+            "remove",
             "queue",
             "nowplaying",
             "diag",
@@ -1600,6 +1610,11 @@ class IntegratedBot:
             "j":    "join",
             "lv":   "leave",
             "p":    "play",
+            "pn":   "playnext",
+            "next": "playnext",
+            "sr":   "search",
+            "find": "search",
+            "rm":   "remove",
             "q":    "queue",
             "np":   "nowplaying",
             "d":    "diag",
@@ -1693,10 +1708,54 @@ class IntegratedBot:
             await self.send_message(room.room_id, "✅ Left Element Call")
             return
 
-        if command == "play":
+        if command == "search":
             if not args:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} play <audio-url-or-query>")
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} search <query>")
                 return
+            ok, results = await self.audio_queue.search(args, SEARCH_RESULTS)
+            if not ok:
+                await self.send_message(room.room_id, f"❌ Search failed: {results}")
+                return
+            if not results:
+                await self.send_message(room.room_id, "❌ No results found")
+                return
+            self._search_results[room.room_id] = (time.monotonic(), [r["url"] for r in results])
+            lines = [f"🔎 {args}", ""]
+            for idx, r in enumerate(results, 1):
+                duration = f" [{self._format_duration(r['duration'])}]" if r.get("duration") else ""
+                channel = f" · {r['channel']}" if r.get("channel") else ""
+                lines.append(f"{idx}. {r['title']}{duration}{channel}")
+            lines += ["", f"`{self._prefix} play <n>` or `{self._prefix} playnext <n>` within {SEARCH_RESULTS_TTL // 60} min"]
+            await self.send_message(room.room_id, "\n".join(lines))
+            return
+
+        if command == "remove":
+            try:
+                position = int(args.strip())
+            except ValueError:
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} remove <position from {self._prefix} queue>")
+                return
+            async with self._playback_lock:
+                if not 1 <= position <= len(self.audio_queue.queue):
+                    await self.send_message(room.room_id, f"❌ No track at position {position}")
+                    return
+                removed = self.audio_queue.queue[position - 1]
+                del self.audio_queue.queue[position - 1]
+                self.audio_queue.maybe_delete_track_file(removed, trigger="after_playback")
+            await self.send_message(room.room_id, f"🗑️ Removed: {display_title(removed) or removed.get('title')}")
+            return
+
+        if command in ("play", "playnext"):
+            # playnext: the track goes to the front of the queue instead of the end.
+            front = command == "playnext"
+            if not args:
+                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} {command} <audio-url-or-query>")
+                return
+            if args.strip().isdigit() and room.room_id in self._search_results:
+                searched_at, urls = self._search_results[room.room_id]
+                index = int(args.strip())
+                if time.monotonic() - searched_at <= SEARCH_RESULTS_TTL and 1 <= index <= len(urls):
+                    args = urls[index - 1]
 
             call_room_id = self._active_call_room_id(room.room_id)
             async with self._play_request_lock:
@@ -1736,6 +1795,10 @@ class IntegratedBot:
                     if resolved_ok and isinstance(resolved, dict) and resolved.get("is_playlist"):
                         playlist_ok = True
                         playlist_info = resolved
+
+                if playlist_ok and front:
+                    await self.send_message(room.room_id, f"❌ `{self._prefix} playnext` takes a single track, not a playlist")
+                    return
 
                 if not playlist_ok:
                     streamed = await self._try_stream_first_idle_play(call_room_id, args)
@@ -1872,6 +1935,10 @@ class IntegratedBot:
                         channel=result.get("channel", ""),
                         uploader=result.get("uploader", ""),
                     )
+                    if front and had_current:
+                        self.audio_queue.queue.appendleft(self.audio_queue.queue.pop())
+                    added = self.audio_queue.queue[0] if front and had_current else self.audio_queue.queue[-1]
+                    position = 1 if front else len(self.audio_queue.queue)
 
                     if had_current:
                         eta_known = True
@@ -1884,7 +1951,7 @@ class IntegratedBot:
                             eta_seconds = current_remaining
 
                         # Sum durations of tracks ahead of the newly queued one.
-                        for queued_item in list(self.audio_queue.queue)[:-1]:
+                        for queued_item in list(self.audio_queue.queue)[: position - 1]:
                             item_duration = queued_item.get("duration") if isinstance(queued_item, dict) else None
                             if eta_known and item_duration is not None:
                                 eta_seconds += float(item_duration)
@@ -1899,8 +1966,8 @@ class IntegratedBot:
                         next_title = self._next_track_title()
                         next_line = f"\nNext: {next_title}" if next_title else ""
                         queued_message = (
-                            f"✅ Queued: {display_title(self.audio_queue.queue[-1]) or title}\n"
-                            f"Position: {len(self.audio_queue.queue)}"
+                            f"✅ Queued{' next' if front else ''}: {display_title(added) or title}\n"
+                            f"Position: {position}"
                             f"{eta_line}{next_line}"
                         )
                     else:

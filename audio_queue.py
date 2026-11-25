@@ -624,6 +624,44 @@ class AudioQueue:
         title = self.normalize_title(str(title_value)) if isinstance(title_value, str) else None
         return True, {"is_playlist": True, "title": title, "entries": urls}
 
+    async def search(self, query: str, count: int) -> tuple[bool, list[dict] | str]:
+        """Top YouTube results for a query (one flat yt-dlp run, nothing resolved).
+
+        Returns (True, [{"url", "title", "duration", "channel"}]) or (False, error).
+        """
+        dlp_cmd = "yt-dlp" if shutil.which("yt-dlp") else "youtube-dlp"
+        if not shutil.which(dlp_cmd):
+            return False, "yt-dlp (or youtube-dlp) is not installed"
+        cmd = [
+            dlp_cmd,
+            "--flat-playlist",
+            "--dump-single-json",
+            "--extractor-retries",
+            str(self.extractor_retries),
+            *YTDLP_JS_RUNTIME,
+        ]
+        cmd.extend(self._cookies_args())
+        cmd.extend(self._yt_dlp_proxy_cla())
+        cmd.append(f"ytsearch{int(count)}:{query.strip()}")
+        code, stdout, stderr = await self._run_command(*cmd)
+        if code != 0:
+            return False, (stderr.strip() or "Search failed")
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError:
+            return False, "Could not parse search results"
+        results = []
+        for item in (data.get("entries") or []) if isinstance(data, dict) else []:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            results.append({
+                "url": f"https://www.youtube.com/watch?v={item['id']}",
+                "title": self.normalize_title(str(item.get("title") or item["id"])),
+                "duration": item.get("duration"),
+                "channel": item.get("channel") or item.get("uploader") or "",
+            })
+        return True, results
+
     async def download_audio(self, query_or_url: str) -> tuple[bool, dict | str]:
         """Download audio, serialized per query/URL (a second caller gets the cached file)."""
         key = self._download_lock_key(query_or_url)
