@@ -588,6 +588,8 @@ class AudioQueue:
 
         urls: list[str] = []
         seen: set[str] = set()
+        # Flat entries carry title/duration: lets the queue show tracks not loaded yet.
+        info: dict[str, dict] = {}
         for item in entries:
             if not isinstance(item, dict):
                 continue
@@ -609,6 +611,11 @@ class AudioQueue:
                 continue
             seen.add(normalized)
             urls.append(normalized)
+            meta = {key: item.get(key) for key in ("title", "duration", "channel", "uploader") if item.get(key)}
+            if isinstance(meta.get("title"), str):
+                meta["title"] = self.normalize_title(meta["title"])
+            if meta.get("title"):
+                info[normalized] = meta
 
         # A link to a video inside a playlist (watch?v=X&list=…) starts at X, as on
         # YouTube; the tracks before it are not queued.
@@ -622,7 +629,7 @@ class AudioQueue:
 
         title_value = data.get("title")
         title = self.normalize_title(str(title_value)) if isinstance(title_value, str) else None
-        return True, {"is_playlist": True, "title": title, "entries": urls}
+        return True, {"is_playlist": True, "title": title, "entries": urls, "info": info}
 
     async def search(self, query: str, count: int) -> tuple[bool, list[dict] | str]:
         """Top YouTube results for a query (one flat yt-dlp run, nothing resolved).

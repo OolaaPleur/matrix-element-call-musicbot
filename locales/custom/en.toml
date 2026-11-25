@@ -110,6 +110,8 @@
 # now_prefix = "Now:"
 # eta_in = "in {eta}"
 # queue_total = "Total: {total}"
+# queue_pending_header = { one = "⏳ Not loaded yet, {count} track (loads one ahead):", other = "⏳ Not loaded yet, {count} tracks (load one ahead):" }
+# queue_pending_more = "…and {count} more"
 # on = "On"
 # off = "Off"
 # audio_settings = """

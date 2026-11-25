@@ -102,6 +102,8 @@ looping = "🔁 (на повторе)"
 now_prefix = "Сейчас:"
 eta_in = "через {eta}"
 queue_total = "Всего: {total}"
+queue_pending_header = { one = "⏳ Ещё не загружен {count} трек (грузится по одному):", few = "⏳ Ещё не загружены {count} трека (грузятся по одному):", many = "⏳ Ещё не загружено {count} треков (грузятся по одному):" }
+queue_pending_more = "…и ещё {count}"
 on = "вкл"
 off = "выкл"
 normalize_set = "✅ Выравнивание громкости: {state}"

@@ -54,7 +54,8 @@ _TOPIC_SUFFIX_RE = re.compile(r"\s*-\s*Topic\s*$", re.IGNORECASE)
 _PER_DEVICE_CALL_STATE_KEY_RE = re.compile(r"^_(@[^:]+:[^_]+)_")
 _DATA_DIR = Path(__file__).resolve().parent / "data"
 SEARCH_RESULTS = 5
-SEARCH_RESULTS_TTL = 300  # seconds `play <n>` refers to the last search
+SEARCH_RESULTS_TTL = 300
+QUEUE_PENDING_SHOWN = 10  # not yet loaded playlist tracks listed by `queue`  # seconds `play <n>` refers to the last search
 
 
 def _clean_title(title: str) -> str:
@@ -145,6 +146,8 @@ class IntegratedBot:
         self._background_load_task: Optional[asyncio.Task] = None
         # Sources the background loader hasn't downloaded yet (shared with `shuffle`)
         self._pending_sources: Optional[deque] = None
+        # Title/duration of the not yet loaded playlist tracks, by source URL (for `queue`).
+        self._pending_info: dict[str, dict] = {}
         self._stream_prefetch_task: Optional[asyncio.Task] = None
         self._current_room_id: Optional[str] = None
         self._current_track_started_at: Optional[float] = None
@@ -1036,6 +1039,7 @@ class IntegratedBot:
             logger.info("Cancelled background queue loader")
         self._background_load_task = None
         self._pending_sources = None
+        self._pending_info = {}
         # The current track's file prefetch is left alone: play/load only add to
         # the queue, and without the file a loop replay or a failed stream would
         # need a new download. stop/leave/shutdown cancel it themselves.
@@ -1207,6 +1211,7 @@ class IntegratedBot:
         *,
         dedupe_existing: bool,
         source_label: str,
+        info: Optional[dict[str, dict]] = None,
     ):
         if not remaining_sources:
             return
@@ -1214,15 +1219,19 @@ class IntegratedBot:
         failures = 0
         pending = deque(remaining_sources)
         self._pending_sources = pending
+        self._pending_info = dict(info or {})
 
         while pending:
-            source_url = pending.popleft()
-            # Wait until the queue has no pre-downloaded tracks before fetching next
+            # Wait until the queue has no pre-downloaded tracks before fetching next.
+            # The next source stays in `pending` meanwhile, so `queue` still lists it.
             while len(self.audio_queue.queue) >= 1:
                 try:
                     await asyncio.sleep(2)
                 except asyncio.CancelledError:
                     return
+            if not pending:
+                break
+            source_url = pending.popleft()
 
             if dedupe_existing and self.audio_queue.has_source(source_url):
                 continue
@@ -1258,6 +1267,7 @@ class IntegratedBot:
 
         if self._pending_sources is pending:
             self._pending_sources = None
+            self._pending_info = {}
 
         if failures:
             await self.send_message(room_id, self._t(room_id, "failed_load_from", failures=failures, source_label=source_label, collection_name=collection_name))
@@ -1917,6 +1927,7 @@ class IntegratedBot:
                                 remaining_sources,
                                 dedupe_existing=True,
                                 source_label="playlist",
+                                info=playlist_info.get("info"),
                             )
                         )
 
@@ -2062,6 +2073,18 @@ class IntegratedBot:
             total_label = self._format_duration(total_duration)
             lines.append("")
             lines.append(self._t(room.room_id, "queue_total", total=total_label))
+
+            pending = self._pending_sources
+            loader_alive = self._background_load_task is not None and not self._background_load_task.done()
+            if pending and loader_alive:
+                not_loaded = list(pending)
+                lines.append("")
+                lines.append(self._t(room.room_id, "queue_pending_header", count=len(not_loaded)))
+                for source in not_loaded[:QUEUE_PENDING_SHOWN]:
+                    meta = self._pending_info.get(source) or {"title": source}
+                    lines.append(self._format_track_line("• ", meta))
+                if len(not_loaded) > QUEUE_PENDING_SHOWN:
+                    lines.append(self._t(room.room_id, "queue_pending_more", count=len(not_loaded) - QUEUE_PENDING_SHOWN))
 
             await self.send_message(room.room_id, "\n".join(lines))
             return
