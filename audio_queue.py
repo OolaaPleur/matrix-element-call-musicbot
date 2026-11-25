@@ -27,6 +27,8 @@ YTDLP_JS_RUNTIME = ["--js-runtimes", "node"]
 # of the selected format). "/best": sites without an audio-only format.
 YTDLP_STREAM_FORMAT = "bestaudio/best"
 INFO_CACHE_MAX = 256
+# Query parameters of a YouTube watch URL that change what is played.
+YOUTUBE_KEPT_PARAMS = {"v", "list", "index"}
 
 
 class AudioQueue:
@@ -339,19 +341,19 @@ class AudioQueue:
             return raw
 
         host = (parsed.hostname or "").lower()
-        if host != "music.youtube.com":
-            return raw
-
-        netloc = parsed.netloc
-        if parsed.port:
-            netloc = f"www.youtube.com:{parsed.port}"
+        # One spelling per video, as yt-dlp's webpage_url has it: the cache is keyed
+        # by it. Share links carry ?si=/&t=/&feature=, which would miss the cache.
+        if host == "youtu.be" and parsed.path.strip("/"):
+            video_id = parsed.path.strip("/").split("/")[0]
+            pairs = [("v", video_id), *parse_qsl(parsed.query, keep_blank_values=True)]
+        elif host in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"} and parsed.path == "/watch":
+            pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        elif host == "music.youtube.com":
+            return urlunparse(parsed._replace(netloc="www.youtube.com"))
         else:
-            netloc = "www.youtube.com"
-
-        query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
-        rebuilt_query = urlencode(query_pairs, doseq=True)
-        normalized = parsed._replace(netloc=netloc, query=rebuilt_query)
-        return urlunparse(normalized)
+            return raw
+        kept = [(k, v) for k, v in pairs if k in YOUTUBE_KEPT_PARAMS]
+        return urlunparse(("https", "www.youtube.com", "/watch", "", urlencode(kept, doseq=True), ""))
 
     @staticmethod
     def looks_like_url(value: str) -> bool:
@@ -398,9 +400,17 @@ class AudioQueue:
             data = json.loads(stdout)
         except json.JSONDecodeError:
             return False, "Could not parse media metadata"
+        ok, info = self._info_from_json(data, query_or_url)
+        if ok and isinstance(info, dict) and self.looks_like_url(query_or_url):
+            self._remember_info(info, alias=query_or_url)
+        return ok, info
 
+    def _info_from_json(self, data: dict, query_or_url: str) -> tuple[bool, dict | str]:
+        is_url = self.looks_like_url(query_or_url)
+        if not isinstance(data, dict):
+            return False, "Could not parse media metadata"
         entry = data
-        entries = data.get("entries") if isinstance(data, dict) else None
+        entries = data.get("entries")
         if isinstance(entries, list) and entries:
             for item in entries:
                 if isinstance(item, dict) and item.get("webpage_url"):
@@ -423,29 +433,25 @@ class AudioQueue:
         if not isinstance(stream_url, str) or not stream_url.strip():
             stream_url = None
 
-        artist  = entry.get("artist")  or ""
-        track   = entry.get("track")   or ""
-        album   = entry.get("album")   or ""
-        channel = entry.get("channel") or entry.get("uploader") or ""
-
         out = {
             "source_url": source_url,
             "title": title,
             "duration": float(duration) if isinstance(duration, (int, float)) else None,
             "uploader": uploader,
             "stream_url": stream_url,
-            "artist": artist,
-            "track": track,
-            "album": album,
-            "channel": channel,
+            "artist": entry.get("artist") or "",
+            "track": entry.get("track") or "",
+            "album": entry.get("album") or "",
+            "channel": entry.get("channel") or entry.get("uploader") or "",
         }
         self._remember_info(out)
         return True, out
 
-    def _remember_info(self, info: dict):
+    def _remember_info(self, info: dict, alias: Optional[str] = None):
         cached = {k: v for k, v in info.items() if k != "stream_url"}
-        self._info_cache.pop(info["source_url"], None)
-        self._info_cache[info["source_url"]] = cached
+        for key in {info["source_url"], alias or info["source_url"]}:
+            self._info_cache.pop(key, None)
+            self._info_cache[key] = cached
         while len(self._info_cache) > INFO_CACHE_MAX:
             self._info_cache.pop(next(iter(self._info_cache)))
 
@@ -565,20 +571,71 @@ class AudioQueue:
         async with lock:
             return await self._download_audio_unlocked(query_or_url)
 
+    def _cache_path(self, source_url: str) -> Path:
+        url_hash = hashlib.md5(source_url.encode(), usedforsecurity=False).hexdigest()[:8]
+        return self.audio_dir / f"{url_hash}.{self.download_format}"
+
+    def _has_local_copy(self, source_url: str) -> bool:
+        cached = self.download_cache.get(source_url)
+        if cached and os.path.exists(cached.get("file") or ""):
+            return True
+        # Files from before a restart are reused only without pre-roll (see _cached_result).
+        return self.preroll_silence <= 0 and self._cache_path(source_url).is_file()
+
+    def _result(self, file_path: str, duration: Optional[float], resolved: dict, non_cacheable: bool) -> dict:
+        return {
+            "file": file_path,
+            "duration": duration,
+            "title": resolved["title"],
+            "source_url": resolved["source_url"],
+            "uploader": resolved.get("uploader"),
+            "non_cacheable": non_cacheable,
+            "artist":  resolved.get("artist",  ""),
+            "track":   resolved.get("track",   ""),
+            "album":   resolved.get("album",   ""),
+            "channel": resolved.get("channel", ""),
+        }
+
+    def _exceeds_cache(self, file_path: str) -> bool:
+        if self.cache_mode != "size_lru" or self.cache_max_bytes <= 0:
+            return False
+        try:
+            return os.path.getsize(file_path) > self.cache_max_bytes
+        except OSError:
+            return False
+
+    async def _cached_result(self, resolved: dict) -> Optional[dict]:
+        source_url = resolved["source_url"]
+        cached = self.download_cache.get(source_url)
+        if cached:
+            cached_file = cached.get("file")
+            if isinstance(cached_file, str) and os.path.exists(cached_file):
+                self._touch_file(cached_file)
+                logger.info(f"Using cached file: {cached_file}")
+                return self._result(cached_file, cached["music_duration"], resolved, self._exceeds_cache(cached_file))
+            self.download_cache.pop(source_url, None)
+
+        # Downloaded before a restart: files are named after the URL, only the
+        # in-memory index was lost.
+        final_output_path = self._cache_path(source_url)
+        if final_output_path.is_file() and self.preroll_silence <= 0:
+            final_output = str(final_output_path)
+            music_duration = await asyncio.to_thread(self.get_audio_duration, final_output)
+            if music_duration is not None:
+                self.download_cache[source_url] = {"file": final_output, "music_duration": music_duration}
+                self._touch_file(final_output)
+                logger.info("Using cached file from disk: %s", final_output)
+                return self._result(final_output, music_duration, resolved, False)
+        return None
+
     async def _download_audio_unlocked(self, query_or_url: str) -> tuple[bool, dict | str]:
         """Download audio from URL/search with caching and pre-roll silence.
 
-        Returns:
-            (success, result)
-
-            Success result shape:
-            {
-                "file": str,
-                "duration": Optional[float],
-                "title": str,
-                "source_url": str,
-                "uploader": Optional[str],
-            }
+        Returns (success, result dict from _result() or an error message).
+        yt-dlp runs: a search query = metadata + download (the metadata tells
+        whether the track is cached); a URL seen before or already on disk =
+        metadata only if needed; a new URL = one run that downloads and prints
+        the metadata.
         """
         query_or_url = query_or_url.strip()
         if not query_or_url:
@@ -591,86 +648,42 @@ class AudioQueue:
 
         query_key = query_or_url.casefold()
         is_direct_url = self.looks_like_url(query_or_url)
-        resolved: dict | str
+        resolved: Optional[dict] = None
         if self.search_mode == "fast" and not is_direct_url and query_key in self.search_cache:
-            resolved_ok = True
             resolved = dict(self.search_cache[query_key])
         elif is_direct_url and query_or_url in self._info_cache:
-            resolved_ok = True
             resolved = dict(self._info_cache[query_or_url])
-        else:
-            resolved_ok, resolved = await self._resolve_media_info(dlp_cmd, query_or_url)
-        if not resolved_ok:
-            return False, resolved
-        if not isinstance(resolved, dict):
-            return False, "Resolved metadata is invalid"
+        elif not is_direct_url or self._has_local_copy(query_or_url):
+            resolved_ok, info = await self._resolve_media_info(dlp_cmd, query_or_url)
+            if not resolved_ok:
+                return False, info
+            if not isinstance(info, dict):
+                return False, "Resolved metadata is invalid"
+            resolved = info
 
-        if self.search_mode == "fast" and not is_direct_url:
-            self.search_cache[query_key] = dict(resolved)
+        if resolved is not None:
+            if self.search_mode == "fast" and not is_direct_url:
+                self.search_cache[query_key] = dict(resolved)
+            hit = await self._cached_result(resolved)
+            if hit:
+                return True, hit
+            return await self._fetch_audio(dlp_cmd, resolved["source_url"], resolved)
+        return await self._fetch_audio(dlp_cmd, query_or_url, None)
 
-        source_url = resolved["source_url"]
-
-        if source_url in self.download_cache:
-            cached = self.download_cache[source_url]
-            cached_file = cached.get("file")
-            if isinstance(cached_file, str) and os.path.exists(cached_file):
-                self._touch_file(cached_file)
-            else:
-                self.download_cache.pop(source_url, None)
-                cached = None
-        else:
-            cached = None
-
-        if cached:
-            non_cacheable = False
-            if self.cache_mode == "size_lru" and self.cache_max_bytes > 0:
-                try:
-                    non_cacheable = os.path.getsize(cached["file"]) > self.cache_max_bytes
-                except OSError:
-                    non_cacheable = False
-            logger.info(f"Using cached file: {cached['file']}")
-            return True, {
-                "file": cached["file"],
-                "duration": cached["music_duration"],
-                "title": resolved["title"],
-                "source_url": source_url,
-                "uploader": resolved["uploader"],
-                "non_cacheable": non_cacheable,
-                "artist":  resolved.get("artist",  ""),
-                "track":   resolved.get("track",   ""),
-                "album":   resolved.get("album",   ""),
-                "channel": resolved.get("channel", ""),
-            }
-
-        url_hash = hashlib.md5(source_url.encode(), usedforsecurity=False).hexdigest()[:8]
+    async def _fetch_audio(self, dlp_cmd: str, url: str, resolved: Optional[dict]) -> tuple[bool, dict | str]:
+        """Run the yt-dlp download; with resolved=None it also prints the metadata (-j)."""
+        url_hash = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()[:8]
         temp_output = str(self.audio_dir / f"{url_hash}_temp.%(ext)s")
-        final_output_path = self.audio_dir / f"{url_hash}.{self.download_format}"
-        final_output = str(final_output_path)
 
-        # Downloaded before a restart: files are named after the URL, only the
-        # in-memory index was lost.
-        if final_output_path.is_file() and self.preroll_silence <= 0:
-            music_duration = await asyncio.to_thread(self.get_audio_duration, final_output)
-            if music_duration is not None:
-                self.download_cache[source_url] = {"file": final_output, "music_duration": music_duration}
-                self._touch_file(final_output)
-                logger.info("Using cached file from disk: %s", final_output)
-                return True, {
-                    "file": final_output,
-                    "duration": music_duration,
-                    "title": resolved["title"],
-                    "source_url": source_url,
-                    "uploader": resolved["uploader"],
-                    "non_cacheable": False,
-                    "artist":  resolved.get("artist",  ""),
-                    "track":   resolved.get("track",   ""),
-                    "album":   resolved.get("album",   ""),
-                    "channel": resolved.get("channel", ""),
-                }
-
-        cmd = [
-            dlp_cmd,
-            *self._yt_dlp_proxy_cla(),
+        cmd = [dlp_cmd]
+        if self.search_mode == "fast":
+            cmd += ["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))]
+        cmd += self._cookies_args()
+        cmd += self._yt_dlp_proxy_cla()
+        if resolved is None:
+            cmd += ["--dump-json", "--no-simulate"]
+        cmd += [
+            "--no-playlist",
             "-x",
             "--audio-format",
             self.ytdlp_audio_format,
@@ -680,28 +693,44 @@ class AudioQueue:
             str(self.extractor_retries),
             "-o",
             temp_output,
-            source_url,
             *YTDLP_JS_RUNTIME,
+            url,
         ]
-        cmd[1:1] = self._cookies_args()
-        if self.search_mode == "fast":
-            cmd[1:1] = ["--no-warnings", "--socket-timeout", str(max(3.0, self.search_timeout_seconds))]
 
         logger.info(
-            "Audio download selected: format=%s (yt-dlp=%s), quality=%s",
+            "Audio download selected: format=%s (yt-dlp=%s), quality=%s%s",
             self.download_format,
             self.ytdlp_audio_format,
             self.audio_quality,
+            "" if resolved else ", metadata in the same run",
         )
 
         try:
             process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            _, stderr = await process.communicate()
+            stdout, stderr = await process.communicate()
 
             if process.returncode != 0:
-                error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                error_msg = stderr.decode(errors="replace").strip() if stderr else "Unknown error"
                 logger.error(f"yt-dlp failed: {error_msg}")
                 return False, error_msg
+
+            if resolved is None:
+                info_line = next(
+                    (line for line in reversed(stdout.decode("utf-8", errors="replace").splitlines())
+                     if line.startswith("{")),
+                    None,
+                )
+                try:
+                    data = json.loads(info_line) if info_line else None
+                except json.JSONDecodeError:
+                    data = None
+                ok, info = self._info_from_json(data, url) if data else (False, "Could not parse media metadata")
+                if not ok or not isinstance(info, dict):
+                    return False, info
+                # A URL spelled differently from webpage_url: remember it too, or the
+                # next request for it would download the file again.
+                self._remember_info(info, alias=url)
+                resolved = info
 
             temp_candidates = [
                 p
@@ -716,6 +745,9 @@ class AudioQueue:
             if temp_file is None or not temp_file.exists():
                 return False, "File not found after download"
 
+            source_url = resolved["source_url"]
+            final_output_path = self._cache_path(source_url)
+            final_output = str(final_output_path)
             music_duration = await asyncio.to_thread(self.get_audio_duration, str(temp_file))
 
             if self.preroll_silence > 0:
@@ -737,13 +769,7 @@ class AudioQueue:
                     except OSError:
                         pass
 
-            non_cacheable = False
-            if self.cache_mode == "size_lru" and self.cache_max_bytes > 0:
-                try:
-                    non_cacheable = os.path.getsize(final_output) > self.cache_max_bytes
-                except OSError:
-                    non_cacheable = False
-
+            non_cacheable = self._exceeds_cache(final_output)
             if non_cacheable:
                 logger.info(
                     "Downloaded file exceeds cache_max_bytes; will delete after playback: %s",
@@ -766,18 +792,7 @@ class AudioQueue:
                     f"(music duration unknown + pre-roll: {self.preroll_silence:.2f}s)"
                 )
 
-            return True, {
-                "file": final_output,
-                "duration": music_duration,
-                "title": resolved["title"],
-                "source_url": source_url,
-                "uploader": resolved["uploader"],
-                "non_cacheable": non_cacheable,
-                "artist":  resolved.get("artist",  ""),
-                "track":   resolved.get("track",   ""),
-                "album":   resolved.get("album",   ""),
-                "channel": resolved.get("channel", ""),
-            }
+            return True, self._result(final_output, music_duration, resolved, non_cacheable)
         except Exception as exc:
             logger.error(f"Download exception: {exc}")
             return False, str(exc)
