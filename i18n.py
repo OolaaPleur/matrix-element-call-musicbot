@@ -69,7 +69,13 @@ class Translations:
                 except (OSError, tomllib.TOMLDecodeError) as exc:
                     logger.warning("Locale %s skipped: %s", path, exc)
                     continue
-                catalogs.setdefault(path.stem, {}).update(data)
+                # The file name is the language code (`lang` command, bot.language),
+                # matched case-insensitively: pt-BR.toml is "pt-br".
+                code = path.stem.lower()
+                if code == "default":
+                    logger.warning("Locale %s skipped: \"default\" is reserved for `lang default`", path)
+                    continue
+                catalogs.setdefault(code, {}).update(data)
         if DEFAULT_LANGUAGE not in catalogs:
             raise RuntimeError(f"{self.builtin_dir}/{DEFAULT_LANGUAGE}.toml is missing")
         self.catalogs = catalogs
