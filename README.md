@@ -173,6 +173,7 @@ Long-term fix:
 - `!m normalize` (`norm`) `on|off` — toggle normalization
 - `!m fadein` (`fi`) `<ms>` — set fade-in (0–5000)
 - `!m volume` (`v`) `<0-200>` — set playback volume percent (logarithmic up to 100: 50% = −12 dB, about half as loud; linear above, 200% = +6 dB)
+- `!m lang` `[code|default]` — show or set the language of the bot's messages in this room
 - `!m status` (`st`) — show bot status
 - `!m diag` (`d`) — show diagnostics
 - `!m config` (`cfg`) — show active config
@@ -281,3 +282,9 @@ Then in Matrix room:
 Forked from [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot).
 
 Shared Matrix bot utilities (cross-signing, E2EE helpers): [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common).
+
+## Languages
+
+The bot's messages come from `locales/<code>.toml` (`en` is the complete reference, `ru` ships too). `[bot] language` in `config.toml` is the default; `!m lang <code>` sets the language of one room (`!m lang default` goes back to the config default).
+
+Your own translations go into `data/locales/<code>.toml`: a new language (copy `locales/en.toml`, set `language_name`, translate), or a few keys overriding a shipped one. Keys you leave out, and translations with a placeholder the bot doesn't know, fall back to English (with a warning in the log). Plural forms are tables keyed by `count`: `{ one = "…", other = "…" }`, Russian `{ one, few, many }`.

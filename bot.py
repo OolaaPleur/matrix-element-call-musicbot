@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 from collections import defaultdict, deque
 from dataclasses import dataclass
 import logging
@@ -15,6 +17,7 @@ from urllib.parse import urlparse
 from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText, UnknownEvent
 from matrix_bot_common.cross_signing import ensure_cross_signing
 
+from i18n import Translations
 from config import Config
 from audio_queue import AudioQueue
 from call_worker_process import CallWorkerProcess
@@ -198,6 +201,11 @@ class IntegratedBot:
         )
         self.call_worker.set_event_handler(self._on_call_worker_event)
         self.saved_queues = SavedQueueStore(config.SAVED_QUEUES_FILE)
+        self.translations = Translations(Path(__file__).resolve().parent / "locales", _DATA_DIR / "locales")
+        if config.BOT_LANGUAGE not in self.translations.catalogs:
+            logger.warning("bot.language=%r has no locale file, using English", config.BOT_LANGUAGE)
+        self._room_languages_file = _DATA_DIR / "room_languages.json"
+        self._room_languages = self._load_room_languages()
 
         self.client.add_event_callback(self.on_message, RoomMessageText)
         self.client.add_event_callback(self.on_invite, InviteMemberEvent)
@@ -513,16 +521,15 @@ class IntegratedBot:
 
     @staticmethod
     def _format_duration(seconds: Optional[float]) -> str:
+        # Clock format: the same in every language, nothing to translate.
         if seconds is None:
-            return "unknown"
+            return "?"
         total = int(round(max(0.0, seconds)))
         hours, rem = divmod(total, 3600)
         minutes, secs = divmod(rem, 60)
         if hours > 0:
-            return f"{hours}h {minutes:02d}m"
-        if minutes > 0:
-            return f"{minutes}m {secs:02d}s"
-        return f"{secs}s"
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        return f"{minutes}:{secs:02d}"
 
     @classmethod
     def _format_track_line(cls, prefix: str, track: dict) -> str:
@@ -572,43 +579,36 @@ class IntegratedBot:
         elapsed = max(0.0, now - self._current_track_started_at)
         return max(0.0, float(duration) - elapsed)
 
-    def _help_text(self) -> str:
-        p = self._prefix
-        return (
-            f"🎵 Commands  (prefix: {p})\n\n"
-            "Playback\n"
-            f"{p} help (h) - show this help\n"
-            f"{p} join (j) - join Element Call in this room\n"
-            f"{p} leave (lv) - leave current Element Call\n"
-            f"{p} play (p) <url-or-query> - add track and auto-join call if needed\n"
-            f"{p} playnext (pn) <url-or-query> - add track to the front of the queue\n"
-            f"{p} search (sr) <query> - show {SEARCH_RESULTS} results; then {p} play <n> / {p} playnext <n>\n"
-            f"{p} queue (q) - show queue with ETA\n"
-            f"{p} remove (rm) <n> - remove track n of the queue\n"
-            f"{p} nowplaying (np) - show current track\n"
-            f"{p} skip (s) - skip current track\n"
-            f"{p} pause (ps) - pause; again to resume\n"
-            f"{p} resume (rs) - resume after pause\n"
-            f"{p} stop (x) - stop playback and clear queue\n"
-            f"{p} loop (lp) - toggle loop mode\n"
-            f"{p} shuffle (sh, random) - shuffle the upcoming tracks\n"
-            f"{p} history (hist) - show recent playback history\n\n"
-            "Saved Queues\n"
-            f"{p} save (sv) <name> [--force] - save current+upcoming queue\n"
-            f"{p} load (ld) <name> - load a saved queue and auto-join call if needed\n"
-            f"{p} queues (qs) - list saved queues\n"
-            f"{p} deletequeue (dq) <name> - delete a saved queue\n"
-            f"{p} renamequeue (rq) <old> <new> - rename a saved queue\n\n"
-            "Audio & Info\n"
-            f"{p} audio (a) - show current audio settings\n"
-            f"{p} normalize (norm) on|off - toggle normalization\n"
-            f"{p} fadein (fi) <ms> - set fade-in (0-5000)\n"
-            f"{p} volume (v) <0-200> - set volume (logarithmic: 50 = about half as loud)\n"
-            f"{p} status (st) - show bot status\n"
-            f"{p} diag (d) - show diagnostics\n"
-            f"{p} config (cfg) - show active config\n"
-            f"{p} defaults (df) - show default config values"
-        )
+    def _load_room_languages(self) -> dict[str, str]:
+        try:
+            data = json.loads(self._room_languages_file.read_text(encoding="utf-8"))
+            return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not read %s: %s", self._room_languages_file, exc)
+            return {}
+
+    def _save_room_languages(self):
+        tmp = self._room_languages_file.with_suffix(".tmp")
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(self._room_languages, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, self._room_languages_file)
+
+    def _room_language(self, room_id: Optional[str]) -> str:
+        language = self._room_languages.get(room_id or "") or self.config.BOT_LANGUAGE
+        return language if language in self.translations.catalogs else "en"
+
+    def _t(self, room_id: Optional[str], key: str, /, **values) -> str:
+        """A chat message in the room's language (see i18n.py, locales/)."""
+        return self.translations.text(self._room_language(room_id), key, **values)
+
+    def _language_label(self, code: str) -> str:
+        name = self.translations.names.get(code, code)
+        return f"{name} ({code})" if name != code else code
+
+    def _help_text(self, room_id: str) -> str:
+        return self._t(room_id, "help", prefix=self._prefix, results=SEARCH_RESULTS)
 
     def _safe_config_text(self) -> str:
         lines = [
@@ -817,7 +817,7 @@ class IntegratedBot:
         if isinstance(source_url, str) and self.audio_queue.has_source(source_url):
             await self.send_message(
                 room_id,
-                f"ℹ️ That track is already playing or queued. Use `{self._prefix} loop` if you want repeats.",
+                self._t(room_id, "track_already_playing_queued", prefix=self._prefix),
             )
             return True
 
@@ -868,7 +868,7 @@ class IntegratedBot:
                     self._current_track_started_at = previous_started_at
             return False
 
-        await self.send_message(room_id, f"▶️ Now playing: {display_title(track) or title}")
+        await self.send_message(room_id, self._t(room_id, "now_playing", title=display_title(track) or title))
 
         self._start_play_tracking(room_id, track)
 
@@ -947,13 +947,13 @@ class IntegratedBot:
                 expected_source=source_ref,
             )
             if announce:
-                await self.send_message(room_id, f"▶️ Synced current track to call: {self.audio_queue.current['title']}")
+                await self.send_message(room_id, self._t(room_id, "synced_current_track_call", title=self.audio_queue.current['title']))
             return True
         except Exception as exc:
             self._current_track_started_at = None
             logger.error("Failed to sync current track after join/recovery: %s", exc)
             if announce:
-                await self.send_message(room_id, f"⚠️ Joined call, but could not sync current track: {exc}")
+                await self.send_message(room_id, self._t(room_id, "joined_call_but_could", exc=exc))
             return False
 
     def _push_play_history(self, room_id: str, track: dict):
@@ -973,23 +973,23 @@ class IntegratedBot:
     async def _join_call_for_room(self, room_id: str, *, announce_if_already_joined: bool = False) -> bool:
         if self._is_joined_in_room_call(room_id):
             if announce_if_already_joined:
-                await self.send_message(room_id, "ℹ️ Already joined this room call")
+                await self.send_message(room_id, self._t(room_id, "already_joined_room_call"))
             return True
 
         if not self.call_worker.available:
             await self.send_message(
                 room_id,
-                "❌ Call worker not found. Expected file: call_worker/src/join_call.js",
+                self._t(room_id, "call_worker_not_found"),
             )
             return False
 
         try:
             await self.call_worker.start(room_id)
         except Exception as exc:
-            await self.send_message(room_id, f"❌ Failed to join Element Call: {exc}")
+            await self.send_message(room_id, self._t(room_id, "failed_join_element_call", exc=exc))
             return False
 
-        await self.send_message(room_id, "✅ Joined Element Call")
+        await self.send_message(room_id, self._t(room_id, "joined_element_call"))
         await self._apply_audio_settings_to_worker()
 
         async with self._playback_lock:
@@ -1010,7 +1010,7 @@ class IntegratedBot:
             return True
         await self.send_message(
             room_id,
-            f"ℹ️ Join call first with `{self._prefix} join` before `{command_name}`.",
+            self._t(room_id, "join_call_first_with", prefix=self._prefix, command_name=command_name),
         )
         return False
 
@@ -1067,7 +1067,7 @@ class IntegratedBot:
         still could not be played (the caller then drops it as before).
         """
         logger.warning("Stream playback failed, retrying from file: %s", track.get("title"))
-        await self.send_message(room_id, "⚠️ Stream failed. Retrying from cached file...", priority="critical")
+        await self.send_message(room_id, self._t(room_id, "stream_failed_retrying_from"), priority="critical")
 
         prefetch = self._stream_prefetch_task
         if prefetch is not None and not prefetch.done():
@@ -1105,9 +1105,9 @@ class IntegratedBot:
                 ok = False
 
         if ok:
-            await self.send_message(room_id, f"▶️ Now playing: {display_title(track)}")
+            await self.send_message(room_id, self._t(room_id, "now_playing", title=display_title(track)))
         else:
-            await self.send_message(room_id, "❌ Stream failed and the file fallback did not work either")
+            await self.send_message(room_id, self._t(room_id, "stream_failed_file_fallback"))
         return ok
 
     async def _wait_for_worker_playback(
@@ -1123,7 +1123,7 @@ class IntegratedBot:
         except Exception as exc:
             logger.error(f"Call worker playback error: {exc}")
             if "InvalidState - failed to capture frame" not in str(exc):
-                await self.send_message(room_id, f"❌ Playback worker error: {exc}")
+                await self.send_message(room_id, self._t(room_id, "playback_worker_error", exc=exc))
             stream_retry_track: Optional[dict] = None
             async with self._playback_lock:
                 if expected_generation != self._playback_generation:
@@ -1254,7 +1254,7 @@ class IntegratedBot:
             self._pending_sources = None
 
         if failures:
-            await self.send_message(room_id, f"⚠️ Failed to load {failures} from {source_label} `{collection_name}`")
+            await self.send_message(room_id, self._t(room_id, "failed_load_from", failures=failures, source_label=source_label, collection_name=collection_name))
 
     async def _on_call_worker_event(self, event: dict):
         event_name = event.get("event")
@@ -1265,7 +1265,7 @@ class IntegratedBot:
         if event_name == "compatibility_notice":
             message = event.get("message")
             if isinstance(message, str) and message:
-                await self.send_message(room_id, f"ℹ️ {message}")
+                await self.send_message(room_id, self._t(room_id, "worker_notice", message=message))
             return
 
         if event_name == "worker_restart_attempt":
@@ -1274,21 +1274,21 @@ class IntegratedBot:
             backoff = event.get("backoff")
             await self.send_message(
                 room_id,
-                f"⚠️ Call worker disconnected. Reconnecting (attempt {attempt}, retry in {backoff}s)...",
+                self._t(room_id, "call_worker_disconnected_reconnecting", attempt=attempt, backoff=backoff),
                 priority="critical",
             )
             return
 
         if event_name == "worker_restarted":
             self._restart_failed_notified = False
-            await self.send_message(room_id, "✅ Call worker reconnected", priority="critical")
+            await self.send_message(room_id, self._t(room_id, "call_worker_reconnected"), priority="critical")
             self._schedule_resync(room_id)
             return
 
         if event_name == "worker_restart_failed":
             if not self._restart_failed_notified:
                 self._restart_failed_notified = True
-                await self.send_message(room_id, f"❌ Call worker could not recover. Use `{self._prefix} join` to reconnect.", priority="critical")
+                await self.send_message(room_id, self._t(room_id, "call_worker_could_not", prefix=self._prefix), priority="critical")
             return
 
         if event_name == "worker_heartbeat_timeout":
@@ -1302,11 +1302,11 @@ class IntegratedBot:
             return
 
         if event_name == "worker_recovering":
-            await self.send_message(room_id, "⚠️ Playback backend stalled. Recovering call worker...", priority="critical")
+            await self.send_message(room_id, self._t(room_id, "playback_backend_stalled_recovering"), priority="critical")
             return
 
         if event_name == "worker_recovered":
-            await self.send_message(room_id, "✅ Call worker recovered", priority="critical")
+            await self.send_message(room_id, self._t(room_id, "call_worker_recovered"), priority="critical")
             self._schedule_resync(room_id)
             return
 
@@ -1369,9 +1369,9 @@ class IntegratedBot:
             self._current_track_started_at = None
             if self._background_load_task is not None and not self._background_load_task.done():
                 # The background loader is still fetching the next track; it starts playback itself
-                await self.send_message(room_id, "⏳ Loading the next track…")
+                await self.send_message(room_id, self._t(room_id, "loading_next_track"))
             else:
-                await self.send_message(room_id, "📭 Queue is empty")
+                await self.send_message(room_id, self._t(room_id, "queue_empty"))
             return
 
         self._current_room_id = room_id
@@ -1382,7 +1382,7 @@ class IntegratedBot:
             self._current_track_started_at = None
             await self.send_message(
                 room_id,
-                f"ℹ️ Playback paused because bot is not joined in this room call. Use `{self._prefix} join`.",
+                self._t(room_id, "playback_paused_because_bot", prefix=self._prefix),
             )
             return
 
@@ -1390,7 +1390,7 @@ class IntegratedBot:
             generation, current_source = await self._play_track_in_worker(next_track, pre_stop=pre_stop)
             self._current_track_started_at = asyncio.get_running_loop().time()
             self._push_play_history(room_id, next_track)
-            await self.send_message(room_id, f"▶️ Now playing: {display_title(next_track)}{loop_indicator}")
+            await self.send_message(room_id, self._t(room_id, "now_playing_loop", title=display_title(next_track), loop_indicator=loop_indicator))
 
             self._start_play_tracking(room_id, next_track)
 
@@ -1406,13 +1406,13 @@ class IntegratedBot:
                 and isinstance(next_track.get("stream_url"), str)
             )
             if can_retry_stream:
-                await self.send_message(room_id, "⚠️ Stream failed. Retrying from cached file...", priority="critical")
+                await self.send_message(room_id, self._t(room_id, "stream_failed_retrying_from"), priority="critical")
                 fallback_ok = await self._retry_stream_track_as_file(room_id, next_track)
                 if fallback_ok:
-                    await self.send_message(room_id, f"▶️ Now playing: {display_title(next_track)}")
+                    await self.send_message(room_id, self._t(room_id, "now_playing", title=display_title(next_track)))
                     return
             self._current_track_started_at = None
-            await self.send_message(room_id, f"❌ Failed to play in call: {exc}")
+            await self.send_message(room_id, self._t(room_id, "failed_play_call", exc=exc))
             return
 
         self._arm_auto_advance(
@@ -1561,7 +1561,7 @@ class IntegratedBot:
                 logger.warning("E2EE: share_group_session on invite failed for %s: %s", room.room_id, exc)
         await self.send_message(
             room.room_id,
-            f"🎵 Music Bot ready. Use `{self._prefix} help` to see commands.",
+            self._t(room.room_id, "bot_ready", prefix=self._prefix),
         )
 
     def _register_command_handlers(self):
@@ -1575,6 +1575,7 @@ class IntegratedBot:
             "playnext",
             "search",
             "remove",
+            "lang",
             "queue",
             "nowplaying",
             "diag",
@@ -1619,6 +1620,7 @@ class IntegratedBot:
             "sr":   "search",
             "find": "search",
             "rm":   "remove",
+            "language": "lang",
             "q":    "queue",
             "np":   "nowplaying",
             "d":    "diag",
@@ -1648,7 +1650,7 @@ class IntegratedBot:
         command = aliases.get(command, command)
         handler = self._command_handlers.get(command)
         if handler is None:
-            await self.send_message(room.room_id, f"❓ Unknown command. Use `{self._prefix} help`", priority="normal")
+            await self.send_message(room.room_id, self._t(room.room_id, "unknown_command_help", prefix=self._prefix), priority="normal")
             return
         if command == "load":
             # Replaces the queue: one at a time with `play` (which takes this lock itself).
@@ -1660,7 +1662,7 @@ class IntegratedBot:
     async def _handle_command_internal(self, room: MatrixRoom, command: str, args: str):
 
         if command == "help":
-            await self.send_message(room.room_id, self._help_text())
+            await self.send_message(room.room_id, self._help_text(room.room_id))
             return
 
         if command == "config":
@@ -1675,23 +1677,23 @@ class IntegratedBot:
             target = args.strip() if args and args.strip().startswith("!") and ":" in args else None
             if target:
                 if self._is_joined_in_room_call(target):
-                    await self.send_message(room.room_id, f"ℹ️ Already joined call in {target}")
+                    await self.send_message(room.room_id, self._t(room.room_id, "already_joined_call", target=target))
                 elif not self.call_worker.available:
-                    await self.send_message(room.room_id, "❌ Call worker not found")
+                    await self.send_message(room.room_id, self._t(room.room_id, "call_worker_missing"))
                 else:
                     try:
                         await self.call_worker.start(target)
-                        await self.send_message(room.room_id, f"✅ Joined Element Call in {target}")
+                        await self.send_message(room.room_id, self._t(room.room_id, "joined_call_in", target=target))
                         await self._apply_audio_settings_to_worker()
                     except Exception as exc:
-                        await self.send_message(room.room_id, f"❌ Failed to join call in {target}: {exc}")
+                        await self.send_message(room.room_id, self._t(room.room_id, "failed_join_call", target=target, exc=exc))
             else:
                 await self._join_call_for_room(room.room_id, announce_if_already_joined=True)
             return
 
         if command == "leave":
             if not self.call_worker.running:
-                await self.send_message(room.room_id, "ℹ️ Not currently in a call")
+                await self.send_message(room.room_id, self._t(room.room_id, "not_currently_call"))
                 return
 
             # The auto-advance timer would otherwise fire after the track's end,
@@ -1709,19 +1711,42 @@ class IntegratedBot:
                 await self._emit_track_finished(_call_room, "stopped")
                 self._current_track_started_at = None
                 await self.call_worker.stop()
-            await self.send_message(room.room_id, "✅ Left Element Call")
+            await self.send_message(room.room_id, self._t(room.room_id, "left_element_call"))
+            return
+
+        if command == "lang":
+            r = room.room_id
+            code = args.strip().lower()
+            available = ", ".join(self._language_label(c) for c in self.translations.languages)
+            if not code:
+                await self.send_message(r, self._t(
+                    r, "lang_current", language=self._language_label(self._room_language(r)),
+                    available=available, prefix=self._prefix, default=self.config.BOT_LANGUAGE,
+                ))
+                return
+            if code == "default":
+                self._room_languages.pop(r, None)
+                self._save_room_languages()
+                await self.send_message(r, self._t(r, "lang_reset", language=self._language_label(self._room_language(r))))
+                return
+            if code not in self.translations.catalogs:
+                await self.send_message(r, self._t(r, "lang_unknown", code=code, available=available))
+                return
+            self._room_languages[r] = code
+            self._save_room_languages()
+            await self.send_message(r, self._t(r, "lang_set", language=self._language_label(code)))
             return
 
         if command == "search":
             if not args:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} search <query>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_search_query", prefix=self._prefix))
                 return
             ok, results = await self.audio_queue.search(args, SEARCH_RESULTS)
             if not ok:
-                await self.send_message(room.room_id, f"❌ Search failed: {results}")
+                await self.send_message(room.room_id, self._t(room.room_id, "search_failed", results=results))
                 return
             if not results:
-                await self.send_message(room.room_id, "❌ No results found")
+                await self.send_message(room.room_id, self._t(room.room_id, "no_results_found"))
                 return
             self._search_results[room.room_id] = (time.monotonic(), [r["url"] for r in results])
             lines = [f"🔎 {args}", ""]
@@ -1729,7 +1754,7 @@ class IntegratedBot:
                 duration = f" [{self._format_duration(r['duration'])}]" if r.get("duration") else ""
                 channel = f" · {r['channel']}" if r.get("channel") else ""
                 lines.append(f"{idx}. {r['title']}{duration}{channel}")
-            lines += ["", f"`{self._prefix} play <n>` or `{self._prefix} playnext <n>` within {SEARCH_RESULTS_TTL // 60} min"]
+            lines += ["", self._t(room.room_id, "search_pick_hint", prefix=self._prefix, minutes=SEARCH_RESULTS_TTL // 60)]
             await self.send_message(room.room_id, "\n".join(lines))
             return
 
@@ -1737,23 +1762,23 @@ class IntegratedBot:
             try:
                 position = int(args.strip())
             except ValueError:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} remove <position from {self._prefix} queue>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_remove_position_from", prefix=self._prefix))
                 return
             async with self._playback_lock:
                 if not 1 <= position <= len(self.audio_queue.queue):
-                    await self.send_message(room.room_id, f"❌ No track at position {position}")
+                    await self.send_message(room.room_id, self._t(room.room_id, "no_track_at_position", position=position))
                     return
                 removed = self.audio_queue.queue[position - 1]
                 del self.audio_queue.queue[position - 1]
                 self.audio_queue.maybe_delete_track_file(removed, trigger="after_playback")
-            await self.send_message(room.room_id, f"🗑️ Removed: {display_title(removed) or removed.get('title')}")
+            await self.send_message(room.room_id, self._t(room.room_id, "removed", title=display_title(removed) or removed.get('title')))
             return
 
         if command in ("play", "playnext"):
             # playnext: the track goes to the front of the queue instead of the end.
             front = command == "playnext"
             if not args:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} {command} <audio-url-or-query>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_audio_url_query", prefix=self._prefix, command=command))
                 return
             if args.strip().isdigit() and room.room_id in self._search_results:
                 searched_at, urls = self._search_results[room.room_id]
@@ -1774,13 +1799,13 @@ class IntegratedBot:
                     try:
                         spotify_item = await resolve_spotify(args)
                     except SpotifyError as exc:
-                        await self.send_message(room.room_id, f"❌ Spotify: {exc}")
+                        await self.send_message(room.room_id, self._t(room.room_id, "spotify_error", exc=exc))
                         return
                     if spotify_item.kind == "track":
                         spotify_track = spotify_item.tracks[0]
                         await self.send_message(
                             room.room_id,
-                            f"🎧 Spotify: {spotify_track.display} — searching YouTube",
+                            self._t(room.room_id, "spotify_searching_youtube", display=spotify_track.display),
                             priority="noisy",
                         )
                         args = spotify_track.query
@@ -1801,7 +1826,7 @@ class IntegratedBot:
                         playlist_info = resolved
 
                 if playlist_ok and front:
-                    await self.send_message(room.room_id, f"❌ `{self._prefix} playnext` takes a single track, not a playlist")
+                    await self.send_message(room.room_id, self._t(room.room_id, "playnext_takes_single_track", prefix=self._prefix))
                     return
 
                 if not playlist_ok:
@@ -1815,7 +1840,7 @@ class IntegratedBot:
                 if playlist_ok and isinstance(playlist_info, dict):
                     entries = playlist_info.get("entries")
                     if not isinstance(entries, list) or not entries:
-                        await self.send_message(room.room_id, "❌ Could not find playable tracks in that playlist")
+                        await self.send_message(room.room_id, self._t(room.room_id, "could_not_find_playable"))
                         return
 
                     playlist_name_raw = playlist_info.get("title")
@@ -1842,16 +1867,16 @@ class IntegratedBot:
                     if not filtered_sources:
                         await self.send_message(
                             room.room_id,
-                            f"ℹ️ All tracks from `{playlist_name}` are already playing or queued",
+                            self._t(room.room_id, "all_tracks_from_are", playlist_name=playlist_name),
                         )
                         return
 
-                    await self.send_message(room.room_id, f"📥 Loading playlist `{playlist_name}`...")
+                    await self.send_message(room.room_id, self._t(room.room_id, "loading_playlist", playlist_name=playlist_name))
 
                     first_item, first_index, failures = await self._download_first_available_source(filtered_sources)
 
                     if first_item is None:
-                        await self.send_message(room.room_id, f"❌ Could not load any tracks from `{playlist_name}`")
+                        await self.send_message(room.room_id, self._t(room.room_id, "could_not_load_any", name=playlist_name))
                         return
 
                     async with self._playback_lock:
@@ -1885,30 +1910,32 @@ class IntegratedBot:
                         )
 
                     total_tracks = loaded_count + len(remaining_sources)
-                    summary = [f"✅ Playlist `{playlist_name}`: {total_tracks} track(s), loading one ahead as needed"]
+                    r = room.room_id
+                    summary = [self._t(r, "playlist_loaded", name=playlist_name, count=total_tracks)]
                     if skipped_existing:
-                        summary.append(f"Skipped already queued: {skipped_existing}")
+                        summary.append(self._t(r, "playlist_skipped_queued", count=skipped_existing))
                     if over_limit_skipped:
-                        summary.append(
-                            f"Skipped by max_tracks_per_request ({self.config.PLAYLIST_MAX_TRACKS_PER_REQUEST}): {over_limit_skipped}"
-                        )
+                        summary.append(self._t(
+                            r, "playlist_skipped_limit",
+                            limit=self.config.PLAYLIST_MAX_TRACKS_PER_REQUEST, count=over_limit_skipped,
+                        ))
                     if failures:
-                        summary.append(f"Failed: {failures}")
+                        summary.append(self._t(r, "playlist_failed", count=failures))
                     await self.send_message(room.room_id, "\n".join(summary))
                     return
 
                 if self.config.SHOW_PROGRESS_MESSAGES:
                     if not self.audio_queue.looks_like_url(args):
-                        asyncio.create_task(self.send_message(room.room_id, f"🔎 Searching: {args}", priority="noisy"))
-                    asyncio.create_task(self.send_message(room.room_id, "⬇️ Downloading...", priority="noisy"))
+                        asyncio.create_task(self.send_message(room.room_id, self._t(room.room_id, "searching", args=args), priority="noisy"))
+                    asyncio.create_task(self.send_message(room.room_id, self._t(room.room_id, "downloading"), priority="noisy"))
 
                 success, result = await self.audio_queue.download_audio(args)
                 if not success:
-                    await self.send_message(room.room_id, f"❌ Download failed: {result}")
+                    await self.send_message(room.room_id, self._t(room.room_id, "download_failed", result=result))
                     return
 
                 if not isinstance(result, dict):
-                    await self.send_message(room.room_id, "❌ Download failed: invalid download metadata")
+                    await self.send_message(room.room_id, self._t(room.room_id, "download_failed_invalid_download"))
                     return
 
                 audio_file = result["file"]
@@ -1919,7 +1946,7 @@ class IntegratedBot:
                 if isinstance(source_url, str) and self.audio_queue.has_source(source_url):
                     await self.send_message(
                         room.room_id,
-                        f"ℹ️ That track is already playing or queued. Use `{self._prefix} loop` if you want repeats.",
+                        self._t(room.room_id, "track_already_playing_queued", prefix=self._prefix),
                     )
                     return
 
@@ -1962,18 +1989,16 @@ class IntegratedBot:
                             else:
                                 eta_known = False
 
-                        eta_line = (
-                            f"\nStarts in: {self._format_duration(eta_seconds)}"
-                            if eta_known
-                            else "\nStarts in: unknown"
-                        )
+                        r = room.room_id
+                        lines = [
+                            self._t(r, "queued_next" if front else "queued", title=display_title(added) or title),
+                            self._t(r, "queued_position", position=position),
+                            self._t(r, "starts_in", eta=self._format_duration(eta_seconds if eta_known else None)),
+                        ]
                         next_title = self._next_track_title()
-                        next_line = f"\nNext: {next_title}" if next_title else ""
-                        queued_message = (
-                            f"✅ Queued{' next' if front else ''}: {display_title(added) or title}\n"
-                            f"Position: {position}"
-                            f"{eta_line}{next_line}"
-                        )
+                        if next_title:
+                            lines.append(self._t(r, "up_next", title=next_title))
+                        queued_message = "\n".join(lines)
                     else:
                         should_advance = True
                 if queued_message:
@@ -1984,16 +2009,16 @@ class IntegratedBot:
 
         if command == "queue":
             if not self.audio_queue.queue and not self.audio_queue.current:
-                await self.send_message(room.room_id, "ℹ️ Queue empty")
+                await self.send_message(room.room_id, self._t(room.room_id, "queue_empty"))
                 return
 
-            lines = ["🎵 Queue", ""]
+            lines = [self._t(room.room_id, "queue_header"), ""]
             eta_known = True
             eta_seconds = 0.0
 
             if self.audio_queue.current:
-                loop_indicator = " 🔁 (looping)" if self.audio_queue.loop_mode else ""
-                lines.append(self._format_track_line("Now: ", self.audio_queue.current) + loop_indicator)
+                loop_indicator = " " + self._t(room.room_id, "looping") if self.audio_queue.loop_mode else ""
+                lines.append(self._format_track_line(self._t(room.room_id, "now_prefix") + " ", self.audio_queue.current) + loop_indicator)
                 lines.append("")
                 current_remaining = self._current_track_remaining_seconds()
                 if current_remaining is None:
@@ -2002,7 +2027,7 @@ class IntegratedBot:
                     eta_seconds = current_remaining
 
             for idx, item in enumerate(self.audio_queue.queue, 1):
-                eta_label = f"in {self._format_duration(eta_seconds)}" if eta_known else "ETA unknown"
+                eta_label = self._t(room.room_id, "eta_in", eta=self._format_duration(eta_seconds if eta_known else None))
                 lines.append(self._format_track_line(f"{idx}. ", item) + f" ({eta_label})")
 
                 item_duration = item.get("duration")
@@ -2023,22 +2048,22 @@ class IntegratedBot:
                     total_duration = None
                 else:
                     total_duration = max(0.0, total_duration - float(current_duration) + current_remaining)
-            total_label = self._format_duration(total_duration) if total_duration is not None else "unknown"
+            total_label = self._format_duration(total_duration)
             lines.append("")
-            lines.append(f"Total: {total_label}")
+            lines.append(self._t(room.room_id, "queue_total", total=total_label))
 
             await self.send_message(room.room_id, "\n".join(lines))
             return
 
         if command == "nowplaying":
             if not self.audio_queue.current:
-                await self.send_message(room.room_id, "ℹ️ Nothing is currently playing")
+                await self.send_message(room.room_id, self._t(room.room_id, "nothing_currently_playing"))
                 return
 
-            line = self._format_track_line("▶️ Now: ", self.audio_queue.current)
+            line = self._format_track_line("▶️ " + self._t(room.room_id, "now_prefix") + " ", self.audio_queue.current)
             next_title = self._next_track_title()
             if next_title:
-                line += f"\nNext: {next_title}"
+                line += "\n" + self._t(room.room_id, "up_next", title=next_title)
             await self.send_message(room.room_id, line)
             return
 
@@ -2070,82 +2095,85 @@ class IntegratedBot:
             return
 
         if command == "audio":
-            await self.send_message(
-                room.room_id,
-                "🎚️ Audio\n"
-                f"Normalize: {'On' if self.config.NORMALIZE_AUDIO else 'Off'}\n"
-                f"Fade-in: {self.config.FADE_IN_MS}ms\n"
-                f"Volume: {self.config.VOLUME_PERCENT}%\n"
-                f"Cache mode: {self.config.AUDIO_CACHE_MODE}\n"
-                f"Cache max: {self._format_bytes(self.config.AUDIO_CACHE_MAX_BYTES)}\n"
-                f"Delete after playback: {'On' if self.config.AUDIO_CACHE_DELETE_AFTER_PLAYBACK else 'Off'}\n"
-                f"Delete on shutdown: {'On' if self.config.AUDIO_CACHE_DELETE_ON_SHUTDOWN else 'Off'}\n"
-                f"Download format: {self.config.AUDIO_DOWNLOAD_FORMAT}\n"
-                f"Stream-first idle: {'On' if self.config.STREAM_FIRST_IDLE else 'Off'}\n"
-                f"Stream prefetch current: {'On' if self.config.STREAM_PREFETCH_CURRENT else 'Off'}",
-            )
+            r = room.room_id
+            onoff = lambda value: self._t(r, "on" if value else "off")  # noqa: E731
+            await self.send_message(r, self._t(
+                r, "audio_settings",
+                normalize=onoff(self.config.NORMALIZE_AUDIO),
+                fade_in_ms=self.config.FADE_IN_MS,
+                volume=self.config.VOLUME_PERCENT,
+                cache_mode=self.config.AUDIO_CACHE_MODE,
+                cache_max=self._format_bytes(self.config.AUDIO_CACHE_MAX_BYTES),
+                delete_after=onoff(self.config.AUDIO_CACHE_DELETE_AFTER_PLAYBACK),
+                delete_on_shutdown=onoff(self.config.AUDIO_CACHE_DELETE_ON_SHUTDOWN),
+                download_format=self.config.AUDIO_DOWNLOAD_FORMAT,
+                stream_first=onoff(self.config.STREAM_FIRST_IDLE),
+                stream_prefetch=onoff(self.config.STREAM_PREFETCH_CURRENT),
+            ))
             return
 
         if command == "normalize":
             value = args.strip().lower()
             if value not in {"on", "off"}:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} normalize on|off")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_normalize_on_off", prefix=self._prefix))
                 return
             self.config.NORMALIZE_AUDIO = value == "on"
             await self._apply_audio_settings_to_worker()
-            await self.send_message(room.room_id, f"✅ Normalize audio: {'On' if self.config.NORMALIZE_AUDIO else 'Off'}")
+            await self.send_message(room.room_id, self._t(
+                room.room_id, "normalize_set", state=self._t(room.room_id, "on" if self.config.NORMALIZE_AUDIO else "off")
+            ))
             return
 
         if command == "fadein":
             raw = args.strip()
             if not raw:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} fadein <milliseconds>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_fadein_milliseconds", prefix=self._prefix))
                 return
             ms = self._parse_int_arg(raw)
             if ms is None:
-                await self.send_message(room.room_id, "❌ Fade-in must be an integer number of milliseconds")
+                await self.send_message(room.room_id, self._t(room.room_id, "fade_must_integer_number"))
                 return
             if ms < 0 or ms > 5000:
-                await self.send_message(room.room_id, "❌ Fade-in must be between 0 and 5000 ms")
+                await self.send_message(room.room_id, self._t(room.room_id, "fade_must_between_ms"))
                 return
             self.config.FADE_IN_MS = ms
             await self._apply_audio_settings_to_worker()
-            await self.send_message(room.room_id, f"✅ Fade-in set to {self.config.FADE_IN_MS}ms")
+            await self.send_message(room.room_id, self._t(room.room_id, "fade_set_ms", fade_in_ms=self.config.FADE_IN_MS))
             return
 
         if command == "volume":
             raw = args.strip()
             if not raw:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} volume <0-200>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_volume", prefix=self._prefix))
                 return
             value = self._parse_int_arg(raw)
             if value is None:
-                await self.send_message(room.room_id, "❌ Volume must be an integer between 0 and 200")
+                await self.send_message(room.room_id, self._t(room.room_id, "volume_must_integer_between"))
                 return
             if value < 0 or value > 200:
-                await self.send_message(room.room_id, "❌ Volume must be between 0 and 200")
+                await self.send_message(room.room_id, self._t(room.room_id, "volume_must_between"))
                 return
             self.config.VOLUME_PERCENT = value
             await self._apply_audio_settings_to_worker()
             if self.call_worker.running:
-                await self.send_message(room.room_id, f"✅ Volume set to {self.config.VOLUME_PERCENT}% (applies immediately)")
+                await self.send_message(room.room_id, self._t(room.room_id, "volume_set_applies_immediately", volume_percent=self.config.VOLUME_PERCENT))
             else:
-                await self.send_message(room.room_id, f"✅ Volume set to {self.config.VOLUME_PERCENT}%")
+                await self.send_message(room.room_id, self._t(room.room_id, "volume_set", volume_percent=self.config.VOLUME_PERCENT))
             return
 
         if command == "history":
             history = list(self._play_history_by_room.get(room.room_id, []))
             if not history:
-                await self.send_message(room.room_id, "ℹ️ No playback history yet")
+                await self.send_message(room.room_id, self._t(room.room_id, "no_playback_history_yet"))
                 return
 
-            lines = ["🕘 Recent playback"]
+            lines = [self._t(room.room_id, "history_header")]
             for idx, item in enumerate(history, 1):
-                title = item.get("title", "unknown")
+                title = item.get("title", "?")
                 duration = self._format_duration(item.get("duration"))
                 at_ts = item.get("at")
-                at_label = time.strftime("%H:%M:%S", time.localtime(at_ts)) if isinstance(at_ts, int) else "unknown"
-                lines.append(f"{idx}. {title} [{duration}] at {at_label}")
+                at_label = time.strftime("%H:%M:%S", time.localtime(at_ts)) if isinstance(at_ts, int) else "?"
+                lines.append(self._t(room.room_id, "history_line", index=idx, title=title, duration=duration, time=at_label))
             await self.send_message(room.room_id, "\n".join(lines))
             return
 
@@ -2157,13 +2185,13 @@ class IntegratedBot:
                 tokens = [t for t in tokens if t != "--force"]
             name = " ".join(tokens).strip()
             if not name:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} save <name> [--force]")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_save_name_force", prefix=self._prefix))
                 return
 
             if self.saved_queues.has_queue(room.room_id, name) and not force:
                 await self.send_message(
                     room.room_id,
-                    f"❌ Saved queue `{name}` already exists. Use `{self._prefix} save {name} --force` to overwrite.",
+                    self._t(room.room_id, "saved_queue_already_exists", name=name, prefix=self._prefix),
                 )
                 return
 
@@ -2197,89 +2225,90 @@ class IntegratedBot:
                     skipped += 1
 
             if not snapshot:
-                await self.send_message(room.room_id, "❌ Nothing saveable in queue right now")
+                await self.send_message(room.room_id, self._t(room.room_id, "nothing_saveable_queue_right"))
                 return
 
             self.saved_queues.save_queue(room.room_id, name, snapshot)
-            msg = f"✅ Saved queue `{name}` with {len(snapshot)} track(s)"
+            msg = self._t(room.room_id, "queue_saved", name=name, count=len(snapshot))
             if skipped:
-                msg += f"\nSkipped {skipped} unsaveable track(s)"
+                msg += "\n" + self._t(room.room_id, "queue_saved_skipped", count=skipped)
             await self.send_message(room.room_id, msg)
             return
 
         if command == "queues":
             names = self.saved_queues.list_names(room.room_id)
             if not names:
-                await self.send_message(room.room_id, "📭 No saved queues in this room")
+                await self.send_message(room.room_id, self._t(room.room_id, "no_saved_queues_room"))
                 return
 
             entries = []
             for name in names:
                 tracks = self.saved_queues.load_queue(room.room_id, name) or []
                 total = self._sum_known_durations(tracks)
-                total_label = self._format_duration(total) if total is not None else "unknown"
-                entries.append(f"- {name} ({len(tracks)} track(s), {total_label})")
+                entries.append(self._t(
+                    room.room_id, "saved_queue_line", name=name, count=len(tracks), total=self._format_duration(total)
+                ))
 
-            await self.send_message(room.room_id, "💾 Saved queues:\n" + "\n".join(entries))
+            await self.send_message(room.room_id, self._t(room.room_id, "saved_queues_header") + "\n" + "\n".join(entries))
             return
 
         if command == "deletequeue":
             name = args.strip()
             if not name:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} deletequeue <name>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_deletequeue_name", prefix=self._prefix))
                 return
             deleted = self.saved_queues.delete_queue(room.room_id, name)
             if not deleted:
-                await self.send_message(room.room_id, f"❌ Saved queue not found: {name}")
+                await self.send_message(room.room_id, self._t(room.room_id, "saved_queue_not_found", name=name))
                 return
-            await self.send_message(room.room_id, f"🗑️ Deleted saved queue `{name}`")
+            await self.send_message(room.room_id, self._t(room.room_id, "deleted_saved_queue", name=name))
             return
 
         if command == "renamequeue":
             parts = args.strip().split(maxsplit=1)
             if len(parts) != 2:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} renamequeue <old> <new>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_renamequeue_old_new", prefix=self._prefix))
                 return
 
             old_name, new_name = parts[0].strip(), parts[1].strip()
             if not old_name or not new_name:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} renamequeue <old> <new>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_renamequeue_old_new", prefix=self._prefix))
                 return
 
             ok, reason = self.saved_queues.rename_queue(room.room_id, old_name, new_name)
             if not ok:
                 if reason == "missing_old":
-                    await self.send_message(room.room_id, f"❌ Saved queue not found: {old_name}")
+                    await self.send_message(room.room_id, self._t(room.room_id, "saved_queue_not_found", name=old_name))
                     return
                 if reason == "new_exists":
-                    await self.send_message(room.room_id, f"❌ A saved queue named `{new_name}` already exists")
+                    await self.send_message(room.room_id, self._t(room.room_id, "saved_queue_named_already", new_name=new_name))
                     return
-                await self.send_message(room.room_id, "❌ Failed to rename saved queue")
+                await self.send_message(room.room_id, self._t(room.room_id, "failed_rename_saved_queue"))
                 return
 
-            await self.send_message(room.room_id, f"✏️ Renamed `{old_name}` to `{new_name}`")
+            await self.send_message(room.room_id, self._t(room.room_id, "renamed", old_name=old_name, new_name=new_name))
             return
 
         if command == "load":
             name = args.strip()
             if not name:
-                await self.send_message(room.room_id, f"❌ Usage: {self._prefix} load <name>")
+                await self.send_message(room.room_id, self._t(room.room_id, "usage_load_name", prefix=self._prefix))
                 return
 
             tracks = self.saved_queues.load_queue(room.room_id, name)
             if tracks is None:
-                await self.send_message(room.room_id, f"❌ Saved queue not found: {name}")
+                await self.send_message(room.room_id, self._t(room.room_id, "saved_queue_not_found", name=name))
                 return
 
             if not tracks:
-                await self.send_message(room.room_id, f"❌ Saved queue `{name}` is empty")
+                await self.send_message(room.room_id, self._t(room.room_id, "saved_queue_empty", name=name))
                 return
 
             if not await self._join_call_for_room(room.room_id):
                 return
 
             self._cancel_background_load()
-            await self.send_message(room.room_id, f"📥 Loading `{name}`...")
+            await self.send_message(room.room_id, self._t(room.room_id, "loading_saved_queue", name=name))
 
             sources: list[str] = []
             failures = 0
@@ -2295,7 +2324,7 @@ class IntegratedBot:
             failures += download_failures
 
             if first_item is None:
-                await self.send_message(room.room_id, f"❌ Could not load any tracks from `{name}`")
+                await self.send_message(room.room_id, self._t(room.room_id, "could_not_load_any", name=name))
                 return
 
             async with self._playback_lock:
@@ -2339,9 +2368,9 @@ class IntegratedBot:
                         source_label="saved queue",
                     )
                 )
-                await self.send_message(room.room_id, f"ℹ️ {len(remaining_sources)} more track(s) queued, loading one ahead as needed")
+                await self.send_message(room.room_id, self._t(room.room_id, "more_tracks_queued", count=len(remaining_sources)))
             elif failures:
-                await self.send_message(room.room_id, f"⚠️ Failed: {failures}")
+                await self.send_message(room.room_id, self._t(room.room_id, "failed_count", failures=failures))
             return
 
         if command == "skip":
@@ -2350,7 +2379,7 @@ class IntegratedBot:
 
             now = time.monotonic()
             if now - self._last_skip_at < self._skip_cooldown_seconds:
-                await self.send_message(room.room_id, "ℹ️ Skip already in progress")
+                await self.send_message(room.room_id, self._t(room.room_id, "skip_already_progress"))
                 return
 
             queue_empty = False
@@ -2359,14 +2388,14 @@ class IntegratedBot:
                     queue_empty = True
                 else:
                     self._last_skip_at = now
-                    asyncio.create_task(self.send_message(room.room_id, "⏭️ Skipping...", priority="noisy"))
+                    asyncio.create_task(self.send_message(room.room_id, self._t(room.room_id, "skipping"), priority="noisy"))
                     _call_room = self.call_worker.room_id or room.room_id
                     await self._emit_track_finished(_call_room, "skipped")
                     self._cancel_worker_playback_wait()
                     await self.call_worker.stop_playback(wait_for_terminal=False)
                     await self._advance_queue(room.room_id, force_next=True, pre_stop=False)
             if queue_empty:
-                await self.send_message(room.room_id, "📭 Queue is empty")
+                await self.send_message(room.room_id, self._t(room.room_id, "queue_empty"))
             return
 
         if command in ("pause", "resume"):
@@ -2377,15 +2406,15 @@ class IntegratedBot:
                 paused = self._paused_at is not None
                 if command == "pause" and not paused:
                     if not self.audio_queue.current or self._current_track_started_at is None:
-                        reply = "ℹ️ Nothing is playing"
+                        reply = self._t(room.room_id, "nothing_playing")
                     else:
                         self._cancel_auto_advance()
                         self._paused_at = loop.time()
                         self._paused_wall = time.time()
                         await self.call_worker.pause_playback()
-                        reply = f"⏸️ Paused. `{self._prefix} pause` or `{self._prefix} resume` to continue"
+                        reply = self._t(room.room_id, "paused", prefix=self._prefix)
                 elif not paused:
-                    reply = "ℹ️ Not paused"
+                    reply = self._t(room.room_id, "not_paused")
                 else:
                     # Shift the start times by the pause length so ETA, auto-advance
                     # and the scrobbler's played time ignore the pause
@@ -2404,7 +2433,7 @@ class IntegratedBot:
                             self._current_room_id or room.room_id,
                             expected_source=self._track_source_ref(current),
                         )
-                    reply = "▶️ Resumed"
+                    reply = self._t(room.room_id, "resumed")
             await self.send_message(room.room_id, reply)
             return
 
@@ -2434,9 +2463,9 @@ class IntegratedBot:
                     self.audio_queue.queue.extend(queued)
                     total = len(queued)
             if total < 2:
-                await self.send_message(room.room_id, "ℹ️ Nothing to shuffle (fewer than 2 upcoming tracks)")
+                await self.send_message(room.room_id, self._t(room.room_id, "nothing_shuffle_fewer_than"))
             else:
-                await self.send_message(room.room_id, f"🔀 Shuffled {total} upcoming tracks")
+                await self.send_message(room.room_id, self._t(room.room_id, "shuffled_upcoming_tracks", count=total))
             return
 
         if command == "loop":
@@ -2448,10 +2477,10 @@ class IntegratedBot:
                 self._cancel_auto_advance()
                 await self.send_message(
                     room.room_id,
-                    "✅ Loop on",
+                    self._t(room.room_id, "loop_on"),
                 )
             else:
-                await self.send_message(room.room_id, "✅ Loop off")
+                await self.send_message(room.room_id, self._t(room.room_id, "loop_off"))
                 current = self.audio_queue.current
                 if current and current.get("duration") is not None and self._current_room_id:
                     self._arm_auto_advance(
@@ -2490,33 +2519,32 @@ class IntegratedBot:
                 for track in tracks_to_cleanup:
                     self.audio_queue.maybe_delete_track_file(track, trigger="after_playback")
                 await self.call_worker.stop_playback(wait_for_terminal=True)
-            await self.send_message(room.room_id, "⏹️ Stopped and cleared queue")
+            await self.send_message(room.room_id, self._t(room.room_id, "stopped_cleared_queue"))
             return
 
         if command == "status":
-            timer_status = (
-                "Active"
-                if self._auto_advance_task and not self._auto_advance_task.done()
-                else "Inactive"
-            )
+            r = room.room_id
+            onoff = lambda value: self._t(r, "on" if value else "off")  # noqa: E731
+            timer_active = bool(self._auto_advance_task and not self._auto_advance_task.done())
             lines = [
-                "✅ Bot online",
-                f"Worker: {self.call_worker.state}",
-                f"Queue: {len(self.audio_queue.queue)} track(s)",
-                f"Loop: {'On' if self.audio_queue.loop_mode else 'Off'}",
-                f"Auto-advance: {timer_status}",
-                f"Pre-roll: {self.audio_queue.preroll_silence:.1f}s",
-                f"Normalize: {'On' if self.config.NORMALIZE_AUDIO else 'Off'}",
-                f"Fade-in: {self.config.FADE_IN_MS}ms",
-                f"Volume: {self.config.VOLUME_PERCENT}%",
+                self._t(r, "status_online"),
+                self._t(r, "status_worker", state=self.call_worker.state),
+                self._t(r, "status_queue", count=len(self.audio_queue.queue)),
+                self._t(r, "status_loop", state=onoff(self.audio_queue.loop_mode)),
+                self._t(r, "status_timer", state=self._t(r, "active" if timer_active else "inactive")),
+                self._t(r, "status_preroll", seconds=self.audio_queue.preroll_silence),
+                self._t(r, "status_normalize", state=onoff(self.config.NORMALIZE_AUDIO)),
+                self._t(r, "status_fade_in", fade_in_ms=self.config.FADE_IN_MS),
+                self._t(r, "status_volume", volume=self.config.VOLUME_PERCENT),
+                self._t(r, "status_language", language=self._language_label(self._room_language(r))),
             ]
             if self.call_worker.running and self.call_worker.room_id:
-                lines.insert(2, f"Room: {self.call_worker.room_id}")
+                lines.insert(2, self._t(r, "status_room", room=self.call_worker.room_id))
             if self.audio_queue.current:
-                lines.insert(2, f"Current: {self.audio_queue.current['title']}")
+                lines.insert(2, self._t(r, "status_current", title=self.audio_queue.current['title']))
                 next_title = self._next_track_title()
                 if next_title:
-                    lines.insert(3, f"Next: {next_title}")
+                    lines.insert(3, self._t(r, "up_next", title=next_title))
             await self.send_message(room.room_id, "\n".join(lines))
             return
 
@@ -2557,7 +2585,7 @@ class IntegratedBot:
             raise
         except Exception as exc:
             logger.exception("Command failed: %r", body[:200])
-            await self.send_message(room.room_id, f"❌ Command failed: {exc}")
+            await self.send_message(room.room_id, self._t(room.room_id, "command_failed", exc=exc))
 
     async def start(self):
         logger.info("=" * 60)

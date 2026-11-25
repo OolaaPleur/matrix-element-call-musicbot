@@ -14,6 +14,7 @@ class Config:
     DEFAULTS: dict[str, Any] = {
         "bot.name": "Music Bot",
         "bot.command_prefix": "!m",
+        "bot.language": "en",
         "bot.history_limit": 10,
         "bot.auto_accept_invites": False,
         "paths.audio_dir": "/tmp/musicbot_audio",
@@ -68,6 +69,11 @@ class Config:
         self.MATRIX_ACCESS_TOKEN = self._get_str("MATRIX_ACCESS_TOKEN", "matrix", "access_token")
 
         self.BOT_NAME = self._get_str("BOT_NAME", "bot", "name", default=self.DEFAULTS["bot.name"])
+        # Default language of chat messages; `<prefix> lang` overrides it per room.
+        self.BOT_LANGUAGE = (
+            self._get_str("BOT_LANGUAGE", "bot", "language", default=self.DEFAULTS["bot.language"])
+            or self.DEFAULTS["bot.language"]
+        ).strip().lower()
         self.HISTORY_LIMIT = self._get_nonnegative_int(
             "HISTORY_LIMIT", "bot", "history_limit", self.DEFAULTS["bot.history_limit"]
         )
