@@ -273,10 +273,7 @@ Back up while the bot is stopped: `crypto_store/` is an SQLite database, a copy 
 
 ## Docker
 
-`docker compose up -d --build` builds the image from this checkout. CI also publishes it as `ghcr.io/oolaapleur/matrix-element-call-musicbot` (`latest`, version tag, commit SHA); to use that instead, remove `build: .` from `docker-compose.yml` and run `docker compose pull`. Bot data (crypto stores, saved queues, room languages) lives in the `musicbot_data` volume.
-The bot runs as uid 10001 in the container, so `config/config.toml` must be readable by it. It holds the access token: prefer `sudo chown 10001 config/config.toml && chmod 600 config/config.toml` over making it world-readable.
-
-The image installs the shared library from GitHub, so only this repository is needed.
+Only this repository is needed: the image fetches the shared library from GitHub while it builds.
 
 ### Linux
 
@@ -284,28 +281,45 @@ The image installs the shared library from GitHub, so only this repository is ne
 git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
 cd matrix-element-call-musicbot
 
-mkdir -p config
 cp config/config.example.toml config/config.toml
-# Edit config/config.toml
+nano config/config.toml          # set homeserver, user_id, access_token
 
+# The bot runs as uid 10001 in the container and the config holds the token:
+chmod 600 config/config.toml
+sudo chown 10001 config/config.toml
+
+docker compose up -d --build     # build the image and start the bot
+docker compose logs -f           # watch it start (Ctrl+C to stop watching)
+```
+
+Update to the latest version:
+
+```bash
+git pull
 docker compose up -d --build
 ```
 
 ### Windows (PowerShell)
 
 > [!WARNING]
-> Not tested on Windows. The commands below should work, but nobody has run them yet; reports welcome.
+> Not tested on Windows. Docker Desktop runs the same Linux image, so it should work; reports welcome.
 
 ```powershell
 git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
 Set-Location .\matrix-element-call-musicbot
 
-New-Item -ItemType Directory -Path .\config -Force | Out-Null
 Copy-Item .\config\config.example.toml .\config\config.toml
-# Edit .\config\config.toml
+notepad .\config\config.toml     # set homeserver, user_id, access_token
 
 docker compose up -d --build
+docker compose logs -f
 ```
+
+### Good to know
+
+- Bot data (crypto stores, saved queues, room languages) is kept in the `musicbot_data` volume; see [Data and Backups](#data-and-backups).
+- Call audio E2EE: create the worker device as shown in [Call audio E2EE](#call-audio-e2ee-optional); the image already has the rtc-node fix.
+- CI also publishes the image as `ghcr.io/oolaapleur/matrix-element-call-musicbot`.
 
 ## Run Without Docker (Raw)
 
