@@ -37,23 +37,26 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 ### Python bot (`bot.py` — `IntegratedBot`)
 - Connects to Matrix via `matrix-nio` (`AsyncClient`), handles E2EE with `SqliteStore`
 - Listens for messages starting with the configured prefix (`!m` by default) and dispatches to handlers in `_handle_command_internal`; command keys are bare words (`"play"`, `"skip"`, etc.) and aliases map short forms (`"p"` → `"play"`)
+- Each command runs in its own task (`_run_command`, since 2026-11-25): a long `play` download no longer holds up the nio sync loop (so `skip`/`stop` get through), and an exception replies "❌ Command failed" instead of crashing `sync_forever`. `play` and `load` are serialized by `_play_request_lock`; queue changes take `_playback_lock`
+- E2EE start-up: `_restore_e2ee_login()` (whoami, `restore_login`, key upload if needed) runs **before** the first sync so it can decrypt; `_finish_e2ee_setup()` (keys_query, cross-signing, room keys) after it
 - Manages an in-memory `AudioQueue` (current track + deque of upcoming tracks)
 - Drives the Node.js call worker via `CallWorkerProcess`
 - Uses a priority `asyncio.PriorityQueue` for outbound messages: `critical=0`, `normal=1`, `noisy=2`
 - `QUIET_MODE=true` (default) suppresses `noisy` messages; `critical` always sends
-- Emits `dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished` custom room events for the companion scrobbler bot; `_active_play` tracks the in-flight play state; `_emit_track_finished` has a double-emit guard
+- Emits `dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished` custom room events for the companion scrobbler bot; `_active_play` tracks the in-flight play state (`_start_play_tracking`); `_emit_track_finished` has a double-emit guard and computes played time without pauses (`_played_seconds`)
+- Those events go through `_emit_queue` → one `_emit_loop` task (in order, 120 s timeout, `ignore_unverified_devices=True`). Before 2026-11-25 they were sent inline under `_playback_lock` with `ignore_unverified_devices=False`: nio retries 429/timeouts forever, so a slow send stalled playback (2026-11-15 16:51, ~4 min, rescued by the advance watchdog), and a room-key re-share to a new device (nio counts only nio-verified devices, cross-signing doesn't count) raised and dropped the event
 
 ### Node.js call worker (`call_worker/src/join_call.js`)
 - Spawned as a subprocess per `!join` call; stdin/stdout carry newline-delimited JSON commands/events
 - Joins Matrix room, joins MatrixRTC session via `matrix-js-sdk`, connects to LiveKit SFU
 - Pipes audio through `ffmpeg` (spawned as a child process) → `AudioFrame` → LiveKit `AudioSource`
 - Supports `play` (file path or stream URL), `stop`, `set_audio`, `ping/pong`, `shutdown`
-- Emits events: `joined`, `play_started`, `play_ended`, `play_stopped`, `pong`, `error`, `left`
+- Emits events: `joined`, `play_started`, `play_ended`, `play_stopped`, `play_failed` (ffmpeg/playback error of the current track), `pong`, `error` (anything else), `left`. Only `play_failed` makes the bot drop or retry the track
 - Audio at 48 kHz mono PCM s16le; FRAME_MS=20ms; volume ramping per-sample to avoid clicks
 
 ### Python↔Node bridge (`call_worker_process.py` — `CallWorkerProcess`)
 - Spawns and monitors the Node.js subprocess
-- Reads events from stdout, pumps stderr to Python logger
+- Reads events from stdout, pumps stderr to Python logger: only lines with error/fail/warn/timeout/… at WARNING, the rest (heartbeats, progress) at DEBUG — all of it is in `call_worker/call_worker.log` anyway
 - Exposes `play()`, `play_stream()`, `stop_playback()`, `set_audio_settings()`, `stop()`
 - Auto-restarts on unexpected crash (up to `max_restart_attempts`, exponential backoff)
 - Heartbeat ping/pong every `heartbeat_interval` seconds; kills worker on timeout
@@ -62,7 +65,8 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 ### Audio pipeline (`audio_queue.py`)
 - Downloads audio via `yt-dlp` (supports URLs and search queries)
 - Cache modes: `size_lru` (LRU eviction at `cache_max_bytes`, min 200 MB), `never_delete`, `always_delete`
-- Stream-first idle: when queue is empty, resolves a stream URL and plays immediately without downloading
+- Stream-first idle: when queue is empty, resolves a stream URL and plays immediately without downloading. One `yt-dlp --dump-single-json -f bestaudio/best` gives both metadata and the stream URL (was two parallel yt-dlp runs); the metadata is kept in `_info_cache` by source URL, so the background download doesn't extract again
+- Cache files are named `<md5(source_url)[:8]>.<format>`; after a restart an existing file is reused (`Using cached file from disk`) instead of downloaded again (only with `preroll_silence = 0`)
 - Stream prefetch: after stream-first play, downloads the file in background for loop support
 - Stream failure mid-playback (e.g. YouTube answers ffmpeg's request with 403 after the worker started; since 2026-11-15): `_wait_for_worker_playback` → `_recover_failed_stream` waits for the prefetch, plays the file (or downloads it), once per track (`stream_file_retry_done`). Before, only a synchronous send failure fell back to a file; a 403 from the running ffmpeg just dropped the track and nothing played. `download_audio` is serialized per query/URL, because the prefetch and the fallback downloading the same track at once wrote the same `<hash>_temp.*` file and both failed. Tested by putting a fake `ffmpeg` that exits 8 on `googlevideo.com/videoplayback` URLs first in the unit's `PATH`.
 - Result dicts include `artist`, `track`, `album`, `channel` from yt-dlp (empty string when absent); consumed by `extract_metadata()` in `bot.py` for scrobbler events

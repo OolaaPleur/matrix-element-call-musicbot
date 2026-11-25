@@ -10,14 +10,18 @@ class SavedQueueStore:
         self.file_path = file_path
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _load_all(self) -> dict:
+    def _load_all(self, *, for_write: bool = False) -> dict:
         if not self.file_path.exists():
             return {"rooms": {}}
         try:
             data = json.loads(self.file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            return {"rooms": {}}
+            data = None
         if not isinstance(data, dict):
+            # Reading: behave as empty. Writing: refuse, or the next save would
+            # replace every saved queue with just the new one.
+            if for_write:
+                raise RuntimeError(f"saved queues file {self.file_path} is unreadable; fix or move it first")
             return {"rooms": {}}
         rooms = data.get("rooms")
         if not isinstance(rooms, dict):
@@ -49,7 +53,7 @@ class SavedQueueStore:
         return sorted(room_data.keys())
 
     def save_queue(self, room_id: str, name: str, tracks: list[dict]):
-        data = self._load_all()
+        data = self._load_all(for_write=True)
         rooms = data.setdefault("rooms", {})
         room_data = rooms.setdefault(room_id, {})
         room_data[name] = {
@@ -76,7 +80,7 @@ class SavedQueueStore:
         return tracks
 
     def delete_queue(self, room_id: str, name: str) -> bool:
-        data = self._load_all()
+        data = self._load_all(for_write=True)
         room_data = data.get("rooms", {}).get(room_id, {})
         if not isinstance(room_data, dict) or name not in room_data:
             return False
@@ -85,7 +89,7 @@ class SavedQueueStore:
         return True
 
     def rename_queue(self, room_id: str, old_name: str, new_name: str) -> tuple[bool, str]:
-        data = self._load_all()
+        data = self._load_all(for_write=True)
         room_data = data.get("rooms", {}).get(room_id, {})
         if not isinstance(room_data, dict):
             return False, "missing_old"

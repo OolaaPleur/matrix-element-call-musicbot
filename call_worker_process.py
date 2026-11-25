@@ -9,6 +9,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+_WORKER_PROBLEM_WORDS = ("error", "fatal", "fail", "warn", "timeout", "exception")
+
 EventHandler = Callable[[dict[str, Any]], Optional[Awaitable[None]]]
 
 
@@ -196,12 +198,14 @@ class CallWorkerProcess:
             await self._stop_locked(clear_desired=True)
 
     async def wait_for_playback_terminal(self, timeout: Optional[float] = None) -> dict[str, Any]:
+        # Only play_failed ends playback with an error; other worker errors (membership
+        # manager, a bad command) don't mean the track failed.
         async def _next() -> dict[str, Any]:
             while True:
                 event = await self._events.get()
                 event_name = event.get("event")
-                if event_name == "error":
-                    raise RuntimeError(str(event.get("message", "Call worker error")))
+                if event_name == "play_failed":
+                    raise RuntimeError(str(event.get("message", "Playback failed")))
                 if event_name in {"play_ended", "play_stopped"}:
                     return event
 
@@ -418,8 +422,15 @@ class CallWorkerProcess:
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").rstrip()
-                if text:
+                if not text:
+                    continue
+                # The worker logs everything to call_worker/call_worker.log too; keep only
+                # problems at WARNING here, not heartbeats and progress lines.
+                lowered = text.lower()
+                if any(word in lowered for word in _WORKER_PROBLEM_WORDS):
                     logger.warning("[call-worker:stderr] %s", text)
+                else:
+                    logger.debug("[call-worker:stderr] %s", text)
         except asyncio.CancelledError:
             pass
 
@@ -433,7 +444,7 @@ class CallWorkerProcess:
         elif event_name == "play_started":
             self._state = "playing"
             self._consecutive_stop_timeouts = 0
-        elif event_name in {"play_stopped", "play_ended"}:
+        elif event_name in {"play_stopped", "play_ended", "play_failed"}:
             if self.running:
                 self._state = "joined"
             self._consecutive_stop_timeouts = 0

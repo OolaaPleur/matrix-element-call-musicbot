@@ -1027,8 +1027,14 @@ async function main() {
                 }
                 const sourceValue = filePath || streamUrl;
                 const sourceType = filePath ? "file" : "url";
+                // play_failed, not error: the bot drops (or retries) the track only for
+                // this, not for unrelated worker errors.
                 void worker.enqueuePlay(sourceValue, command.title ?? null, sourceType).catch((error) => {
-                    emit({ event: "error", message: error instanceof Error ? error.message : String(error) });
+                    emit({
+                        event: "play_failed",
+                        source: sourceValue,
+                        message: error instanceof Error ? error.message : String(error),
+                    });
                 });
                 continue;
             }

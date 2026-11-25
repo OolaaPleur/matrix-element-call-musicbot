@@ -15,13 +15,6 @@ from urllib.parse import urlparse
 from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText, UnknownEvent
 from matrix_bot_common.cross_signing import ensure_cross_signing
 
-_E2EE_AVAILABLE = False
-try:
-    from nio.store import SqliteStore as _SqliteStore  # noqa: F401
-    _E2EE_AVAILABLE = True
-except ImportError:
-    pass
-
 from config import Config
 from audio_queue import AudioQueue
 from call_worker_process import CallWorkerProcess
@@ -117,12 +110,9 @@ class IntegratedBot:
     def __init__(self, config: Config):
         self.config = config
         self._prefix = config.COMMAND_PREFIX
-        if _E2EE_AVAILABLE:
-            _store_dir = Path(__file__).resolve().parent / "data" / "crypto_store"
-            _store_dir.mkdir(parents=True, exist_ok=True)
-            self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID, store_path=str(_store_dir) + "/")
-        else:
-            self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID)
+        _store_dir = Path(__file__).resolve().parent / "data" / "crypto_store"
+        _store_dir.mkdir(parents=True, exist_ok=True)
+        self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID, store_path=str(_store_dir) + "/")
         self.client.access_token = config.MATRIX_ACCESS_TOKEN
         self.first_sync_done = False
 
@@ -177,6 +167,11 @@ class IntegratedBot:
         # is in the call while any of them is active.
         self._call_memberships: dict[str, dict[str, str]] = {}
         self._active_play: dict | None = None
+        # Scrobbler events go out in order through one background task, so playback
+        # never waits on Matrix (nio retries 429s and timeouts indefinitely).
+        self._emit_queue: asyncio.Queue[tuple[str, str, dict, str]] = asyncio.Queue()
+        self._emit_task: Optional[asyncio.Task] = None
+        self._command_tasks: set[asyncio.Task] = set()
         self.call_worker = CallWorkerProcess(
             Path(__file__).resolve().parent,
             max_restart_attempts=config.WORKER_MAX_RESTART_ATTEMPTS,
@@ -199,8 +194,7 @@ class IntegratedBot:
 
         self.client.add_event_callback(self.on_message, RoomMessageText)
         self.client.add_event_callback(self.on_invite, InviteMemberEvent)
-        if _E2EE_AVAILABLE:
-            self.client.add_event_callback(self._on_megolm_event, MegolmEvent)
+        self.client.add_event_callback(self._on_megolm_event, MegolmEvent)
         self.client.add_event_callback(self._on_call_member_state, UnknownEvent)
 
         self._command_handlers: dict[str, Callable[[MatrixRoom, str], Awaitable[None]]] = {}
@@ -294,34 +288,102 @@ class IntegratedBot:
                 if active:
                     logger.info("seed call_participants: room=%s user=%s active=True", room_id, user_id)
 
-    async def _emit_track_finished(self, call_room_id: str, reason: str, played_s: int):
+    def _played_seconds(self) -> int:
+        """Seconds the active play has been audible (a pause in progress doesn't count)."""
+        if not self._active_play:
+            return 0
+        now = self._paused_wall if self._paused_wall is not None else time.time()
+        return max(0, int(now - self._active_play["started_at"]))
+
+    async def _emit_track_finished(self, call_room_id: str, reason: str, played_s: Optional[int] = None):
         if self._active_play is None or self._active_play.get("finished"):
             return
         self._active_play["finished"] = True
+        if played_s is None:
+            played_s = self._played_seconds()
 
         current = set(self.get_call_participants(call_room_id))
         eligible = list(self._active_play["started_participants"] & current)
-
-        try:
-            _resp = await self.client.room_send(
-                room_id=call_room_id,
-                message_type=EVT_TRACK_FINISHED,
-                content={
-                    "play_id": self._active_play["play_id"],
-                    "played_s": int(played_s),
-                    "reason": reason,
-                    "finished_at": int(time.time()),
-                    "eligible_participants": eligible,
-                },
-                ignore_unverified_devices=False,
-            )
-            self._log_emit(
-                "track_finished", _resp, self._active_play["play_id"],
-                f"reason={reason} played_s={int(played_s)} eligible={eligible}",
-            )
-        except Exception as exc:
-            logger.warning("Failed to emit track_finished: %s", exc)
+        play_id = self._active_play["play_id"]
+        self._queue_emit(
+            call_room_id,
+            EVT_TRACK_FINISHED,
+            {
+                "play_id": play_id,
+                "played_s": int(played_s),
+                "reason": reason,
+                "finished_at": int(time.time()),
+                "eligible_participants": eligible,
+            },
+            f"reason={reason} played_s={int(played_s)} eligible={eligible}",
+        )
         self._active_play = None
+
+    def _start_play_tracking(self, room_id: str, track: dict):
+        """New active play for the scrobbler; announces it if the metadata is usable."""
+        artist, track_name, album, quality = extract_metadata(track)
+        play_id = str(uuid.uuid4())
+        participants = self.get_call_participants(room_id)
+        started_at = int(time.time())
+        duration_s = int(track.get("duration") or 0)
+        self._active_play = {
+            "play_id": play_id,
+            "started_at": started_at,
+            "started_participants": set(participants),
+            "duration_s": duration_s,
+            "finished": False,
+        }
+        if not (artist and track_name):
+            logger.info(
+                "Skipping track_started emit: no artist/track metadata (play_id=%s title=%r channel=%r uploader=%r artist=%r track=%r)",
+                play_id,
+                track.get("title"), track.get("channel"), track.get("uploader"),
+                track.get("artist"), track.get("track"),
+            )
+            return
+        self._queue_emit(
+            room_id,
+            EVT_TRACK_STARTED,
+            {
+                "play_id": play_id,
+                "source": detect_source(track.get("source_url", "")),
+                "source_url": track.get("source_url", ""),
+                "artist": artist,
+                "track": track_name,
+                "album": album,
+                "duration_s": duration_s,
+                "metadata_quality": quality,
+                "started_at": started_at,
+                "call_participants": participants,
+                "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
+            },
+            f"track={artist} - {track_name} quality={quality} participants={participants}",
+        )
+
+    def _queue_emit(self, room_id: str, event_type: str, content: dict, details: str):
+        self._emit_queue.put_nowait((room_id, event_type, content, details))
+
+    async def _emit_loop(self):
+        while True:
+            room_id, event_type, content, details = await self._emit_queue.get()
+            kind = event_type.rsplit(".", 1)[-1]
+            try:
+                # Unverified devices: nio counts only devices verified in nio itself,
+                # cross-signing doesn't count; refusing them would drop the event.
+                resp = await asyncio.wait_for(
+                    self.client.room_send(
+                        room_id=room_id,
+                        message_type=event_type,
+                        content=content,
+                        ignore_unverified_devices=True,
+                    ),
+                    timeout=120,
+                )
+                self._log_emit(kind, resp, content.get("play_id"), details)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Emit %s play_id=%s failed: %r (%s)", kind, content.get("play_id"), exc, details)
 
     def _start_message_dispatcher(self):
         if self._message_dispatch_task and not self._message_dispatch_task.done():
@@ -779,51 +841,7 @@ class IntegratedBot:
 
         await self.send_message(room_id, f"▶️ Now playing: {display_title(track) or title}")
 
-        _artist, _track_name, _album, _quality = extract_metadata(track)
-        _source = detect_source(track.get("source_url", ""))
-        _play_id = str(uuid.uuid4())
-        _participants = self.get_call_participants(room_id)
-        _started_at = int(time.time())
-        self._active_play = {
-            "play_id": _play_id,
-            "started_at": _started_at,
-            "started_participants": set(_participants),
-            "duration_s": int(track.get("duration") or 0),
-            "finished": False,
-        }
-        if _artist and _track_name:
-            try:
-                _resp = await self.client.room_send(
-                    room_id=room_id,
-                    message_type=EVT_TRACK_STARTED,
-                    content={
-                        "play_id": _play_id,
-                        "source": _source,
-                        "source_url": track.get("source_url", ""),
-                        "artist": _artist,
-                        "track": _track_name,
-                        "album": _album,
-                        "duration_s": int(track.get("duration") or 0),
-                        "metadata_quality": _quality,
-                        "started_at": _started_at,
-                        "call_participants": _participants,
-                        "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
-                    },
-                    ignore_unverified_devices=False,
-                )
-                self._log_emit(
-                    "track_started", _resp, _play_id,
-                    f"track={_artist} - {_track_name!s} quality={_quality} participants={_participants}",
-                )
-            except Exception as _exc:
-                logger.warning("Failed to emit track_started: %s", _exc)
-        else:
-            logger.info(
-                "Skipping track_started emit: no artist/track metadata (play_id=%s title=%r channel=%r uploader=%r artist=%r track=%r)",
-                _play_id,
-                track.get("title"), track.get("channel"), track.get("uploader"),
-                track.get("artist"), track.get("track"),
-            )
+        self._start_play_tracking(room_id, track)
 
         if self.config.STREAM_PREFETCH_CURRENT and isinstance(source_url, str) and source_url:
             self._stream_prefetch_task = asyncio.create_task(
@@ -970,8 +988,7 @@ class IntegratedBot:
         """Drop the failed track and move on. Caller holds _playback_lock."""
         self._current_track_started_at = None
 
-        _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
-        await self._emit_track_finished(room_id, "error", _played_s)
+        await self._emit_track_finished(room_id, "error")
 
         if self.audio_queue.queue:
             await self._advance_queue(room_id, force_next=True, pre_stop=False)
@@ -1089,8 +1106,7 @@ class IntegratedBot:
         if event_name != "play_ended":
             return
 
-        _played_s = event.get("played_s") or (int(time.time() - self._active_play["started_at"]) if self._active_play else 0)
-        await self._emit_track_finished(room_id, "finished", _played_s)
+        await self._emit_track_finished(room_id, "finished", event.get("played_s"))
 
         async with self._playback_lock:
             await self._advance_queue(room_id, force_next=not self.audio_queue.loop_mode)
@@ -1267,9 +1283,7 @@ class IntegratedBot:
         force_next: bool = False,
         pre_stop: bool = True,
     ):
-        if self._active_play and not self._active_play.get("finished"):
-            played_s = int(time.time() - self._active_play["started_at"])
-            await self._emit_track_finished(room_id, "finished", played_s)
+        await self._emit_track_finished(room_id, "finished")
 
         previous_current = self.audio_queue.current
         if from_timer:
@@ -1313,51 +1327,7 @@ class IntegratedBot:
             self._push_play_history(room_id, next_track)
             await self.send_message(room_id, f"▶️ Now playing: {display_title(next_track)}{loop_indicator}")
 
-            _artist, _track_name, _album, _quality = extract_metadata(next_track)
-            _source = detect_source(next_track.get("source_url", ""))
-            _play_id = str(uuid.uuid4())
-            _participants = self.get_call_participants(room_id)
-            _started_at = int(time.time())
-            self._active_play = {
-                "play_id": _play_id,
-                "started_at": _started_at,
-                "started_participants": set(_participants),
-                "duration_s": int(next_track.get("duration") or 0),
-                "finished": False,
-            }
-            if _artist and _track_name:
-                try:
-                    _resp = await self.client.room_send(
-                        room_id=room_id,
-                        message_type=EVT_TRACK_STARTED,
-                        content={
-                            "play_id": _play_id,
-                            "source": _source,
-                            "source_url": next_track.get("source_url", ""),
-                            "artist": _artist,
-                            "track": _track_name,
-                            "album": _album,
-                            "duration_s": int(next_track.get("duration") or 0),
-                            "metadata_quality": _quality,
-                            "started_at": _started_at,
-                            "call_participants": _participants,
-                            "emitter": {"user_id": self.client.user_id, "kind": BOT_KIND},
-                        },
-                        ignore_unverified_devices=False,
-                    )
-                    self._log_emit(
-                        "track_started", _resp, _play_id,
-                        f"track={_artist} - {_track_name!s} quality={_quality} participants={_participants}",
-                    )
-                except Exception as _exc:
-                    logger.warning("Failed to emit track_started: %s", _exc)
-            else:
-                logger.info(
-                "Skipping track_started emit: no artist/track metadata (play_id=%s title=%r channel=%r uploader=%r artist=%r track=%r)",
-                _play_id,
-                next_track.get("title"), next_track.get("channel"), next_track.get("uploader"),
-                next_track.get("artist"), next_track.get("track"),
-            )
+            self._start_play_tracking(room_id, next_track)
 
             self._worker_playback_task = asyncio.create_task(
                 self._wait_for_worker_playback(room_id, generation, current_source)
@@ -1419,83 +1389,62 @@ class IntegratedBot:
         self._pending_megolm.pop(session_id, None)
         logger.debug("E2EE: key for session %s never arrived, giving up", session_id)
 
-    async def _setup_e2ee(self):
-        if not _E2EE_AVAILABLE:
-            return
-
-        # --- whoami ---
+    async def _restore_e2ee_login(self) -> Optional[str]:
+        """Load the crypto store before the first sync, so it can decrypt. Returns the device ID."""
         try:
             response = await self.client.whoami()
-            if not hasattr(response, "device_id") or not response.device_id:
-                logger.warning("E2EE setup: whoami failed or returned no device_id: %s", response)
-                return
-            device_id: str = response.device_id
-            user_id: str = response.user_id
-            logger.info("E2EE: whoami ok user_id=%s device_id=%s", user_id, device_id)
         except Exception as exc:
             logger.warning("E2EE setup: whoami failed (%s), skipping E2EE", exc)
-            return
+            return None
+        device_id = getattr(response, "device_id", None)
+        if not device_id:
+            logger.warning("E2EE setup: whoami returned no device_id: %s", response)
+            return None
+        logger.info("E2EE: whoami ok user_id=%s device_id=%s", response.user_id, device_id)
 
-        # --- persist device_id ---
+        # data/device_id is read by scripts/rotate_access_token.py.
+        device_id_file = _DATA_DIR / "device_id"
         try:
-            device_id_file = Path(__file__).resolve().parent / "data" / "device_id"
-            device_id_file.parent.mkdir(parents=True, exist_ok=True)
-            if device_id_file.exists():
-                stored = device_id_file.read_text(encoding="utf-8").strip()
-                if stored and stored != device_id:
-                    logger.warning(
-                        "E2EE: device_id changed from %s to %s — crypto store may be stale",
-                        stored,
-                        device_id,
-                    )
-            device_id_file.write_text(device_id, encoding="utf-8")
-            logger.info("E2EE: device_id persisted")
-        except Exception as exc:
+            stored = device_id_file.read_text(encoding="utf-8").strip() if device_id_file.exists() else ""
+            if stored and stored != device_id:
+                logger.warning("E2EE: device_id changed from %s to %s — crypto store may be stale", stored, device_id)
+            if stored != device_id:
+                device_id_file.write_text(device_id, encoding="utf-8")
+        except OSError as exc:
             logger.warning("E2EE: could not persist device_id (%s), continuing", exc)
 
-        # --- restore_login ---
         try:
-            self.client.restore_login(user_id, device_id, self.config.MATRIX_ACCESS_TOKEN)
-            logger.info("E2EE: restore_login ok")
+            self.client.restore_login(response.user_id, device_id, self.config.MATRIX_ACCESS_TOKEN)
         except Exception as exc:
             logger.warning("E2EE: restore_login failed (%s), skipping E2EE", exc)
-            return
+            return None
+        if self.client.should_upload_keys:
+            try:
+                upload = await self.client.keys_upload()
+                logger.info("E2EE: keys_upload one_time_key_counts=%s", getattr(upload, "one_time_key_counts", upload))
+            except Exception as exc:
+                logger.warning("E2EE: keys_upload failed: %s", exc)
+        self.call_worker._env_overrides["MATRIX_DEVICE_ID"] = device_id
+        return device_id
 
-        # --- keys_upload ---
-        try:
-            upload_resp = await self.client.keys_upload()
-            if not hasattr(upload_resp, "one_time_key_counts"):
-                logger.warning("E2EE: keys_upload unexpected response: %s", upload_resp)
-            else:
-                logger.info("E2EE: keys_upload ok one_time_key_counts=%s", upload_resp.one_time_key_counts)
-        except Exception as exc:
-            logger.debug("E2EE: keys_upload skipped: %s", exc)
-
-        # --- keys_query ---
+    async def _finish_e2ee_setup(self, device_id: str):
+        """After the first sync: device keys, cross-signing, room keys for joined rooms."""
         try:
             await self.client.keys_query()
-            logger.info("E2EE: keys_query ok")
         except Exception as exc:
             logger.debug("E2EE: keys_query skipped: %s", exc)
 
-        # --- cross-signing bootstrap ---
         try:
-            _data_dir = Path(__file__).resolve().parent / "data"
             await ensure_cross_signing(
                 homeserver=self.config.MATRIX_HOMESERVER,
                 token=self.config.MATRIX_ACCESS_TOKEN,
-                user_id=user_id,
+                user_id=self.client.user_id,
                 device_id=device_id,
-                data_dir=_data_dir,
+                data_dir=_DATA_DIR,
             )
         except Exception as exc:
             logger.warning("E2EE: cross-signing setup failed: %s", exc)
 
-        # --- inject device_id for call worker ---
-        self.call_worker._env_overrides["MATRIX_DEVICE_ID"] = device_id
-        logger.info("E2EE setup complete device_id=%s", device_id)
-
-        # --- share group session for already-joined encrypted rooms ---
         for room_id, room_obj in self.client.rooms.items():
             if room_obj.encrypted:
                 try:
@@ -1503,6 +1452,7 @@ class IntegratedBot:
                     logger.info("E2EE: shared group session for room %s", room_id)
                 except Exception as exc:
                     logger.warning("E2EE: share_group_session failed for %s: %s", room_id, exc)
+        logger.info("E2EE setup complete device_id=%s", device_id)
 
     async def on_invite(self, room: MatrixRoom, event: InviteMemberEvent):
         trusted = self.config.AUTO_ACCEPT_INVITES_FROM
@@ -1519,14 +1469,13 @@ class IntegratedBot:
 
         logger.info("Invited to %s by %s", room.display_name, event.sender)
         await self.client.join(room.room_id)
-        if _E2EE_AVAILABLE:
-            joined_room = self.client.rooms.get(room.room_id)
-            if joined_room and joined_room.encrypted:
-                try:
-                    await self.client.share_group_session(room.room_id, ignore_unverified_devices=True)
-                    logger.info("E2EE: shared group session for newly joined room %s", room.room_id)
-                except Exception as exc:
-                    logger.warning("E2EE: share_group_session on invite failed for %s: %s", room.room_id, exc)
+        joined_room = self.client.rooms.get(room.room_id)
+        if joined_room and joined_room.encrypted:
+            try:
+                await self.client.share_group_session(room.room_id, ignore_unverified_devices=True)
+                logger.info("E2EE: shared group session for newly joined room %s", room.room_id)
+            except Exception as exc:
+                logger.warning("E2EE: share_group_session on invite failed for %s: %s", room.room_id, exc)
         await self.send_message(
             room.room_id,
             f"🎵 Music Bot ready. Use `{self._prefix} help` to see commands.",
@@ -1610,6 +1559,11 @@ class IntegratedBot:
         if handler is None:
             await self.send_message(room.room_id, f"❓ Unknown command. Use `{self._prefix} help`", priority="normal")
             return
+        if command == "load":
+            # Replaces the queue: one at a time with `play` (which takes this lock itself).
+            async with self._play_request_lock:
+                await handler(room, args)
+            return
         await handler(room, args)
 
     async def _handle_command_internal(self, room: MatrixRoom, command: str, args: str):
@@ -1650,9 +1604,11 @@ class IntegratedBot:
                 return
 
             _call_room = self.call_worker.room_id or room.room_id
-            _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
-            await self._emit_track_finished(_call_room, "stopped", _played_s)
+            await self._emit_track_finished(_call_room, "stopped")
 
+            # The auto-advance timer would otherwise fire after the track's end,
+            # pop the next track and post "not joined in this room call".
+            self._cancel_auto_advance()
             self._cancel_worker_playback_wait()
             self._cancel_background_load()
             self._current_track_started_at = None
@@ -2192,6 +2148,8 @@ class IntegratedBot:
                 return
 
             async with self._playback_lock:
+                # The track being replaced was stopped, not played to the end.
+                await self._emit_track_finished(self._active_call_room_id(room.room_id), "stopped")
                 prior_tracks = []
                 if self.audio_queue.current:
                     prior_tracks.append(self.audio_queue.current)
@@ -2252,8 +2210,7 @@ class IntegratedBot:
                     self._last_skip_at = now
                     asyncio.create_task(self.send_message(room.room_id, "⏭️ Skipping...", priority="noisy"))
                     _call_room = self.call_worker.room_id or room.room_id
-                    _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
-                    await self._emit_track_finished(_call_room, "skipped", _played_s)
+                    await self._emit_track_finished(_call_room, "skipped")
                     self._cancel_worker_playback_wait()
                     await self.call_worker.stop_playback(wait_for_terminal=False)
                     await self._advance_queue(room.room_id, force_next=True, pre_stop=False)
@@ -2359,8 +2316,7 @@ class IntegratedBot:
                 return
 
             _call_room = self.call_worker.room_id or room.room_id
-            _played_s = int(time.time() - self._active_play["started_at"]) if self._active_play else 0
-            await self._emit_track_finished(_call_room, "stopped", _played_s)
+            await self._emit_track_finished(_call_room, "stopped")
 
             self._cancel_auto_advance()
             self._cancel_worker_playback_wait()
@@ -2432,7 +2388,20 @@ class IntegratedBot:
             return
 
         if event.body.strip().startswith(self._prefix):
-            await self.handle_command(room, event.body)
+            # Own task: a `play` that downloads for a while must not hold up the sync
+            # loop (and with it `skip`/`stop`), and an exception must not end it.
+            task = asyncio.create_task(self._run_command(room, event.body))
+            self._command_tasks.add(task)
+            task.add_done_callback(self._command_tasks.discard)
+
+    async def _run_command(self, room: MatrixRoom, body: str):
+        try:
+            await self.handle_command(room, body)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Command failed: %r", body[:200])
+            await self.send_message(room.room_id, f"❌ Command failed: {exc}")
 
     async def start(self):
         logger.info("=" * 60)
@@ -2446,46 +2415,40 @@ class IntegratedBot:
         self._run_startup_checks()
         logger.info("=" * 60)
 
-        if _E2EE_AVAILABLE:
-            _did_file = Path(__file__).resolve().parent / "data" / "device_id"
-            if _did_file.exists():
-                _did = _did_file.read_text(encoding="utf-8").strip()
-                if _did:
-                    try:
-                        self.client.restore_login(self.config.MATRIX_USER_ID, _did, self.config.MATRIX_ACCESS_TOKEN)
-                        _up = await self.client.keys_upload()
-                        logger.info("E2EE: early setup ok device_id=%s otk_counts=%s", _did, getattr(_up, "one_time_key_counts", "?"))
-                    except Exception as exc:
-                        logger.warning("E2EE: early setup failed: %s", exc)
-
+        device_id = await self._restore_e2ee_login()
         await self.client.sync(timeout=30000, full_state=True)
         self.first_sync_done = True
         await self._seed_call_participants_from_state()
-        await self._setup_e2ee()
+        if device_id:
+            await self._finish_e2ee_setup(device_id)
         self._start_message_dispatcher()
+        self._emit_task = asyncio.create_task(self._emit_loop())
         self._ensure_advance_watchdog()
         logger.info("Bot ready")
 
         try:
             backoff = 5
-            while not getattr(self, "_shutdown", False):
+            while True:
+                started = time.monotonic()
                 try:
                     await self.client.sync_forever(
                         timeout=30000,
                         full_state=False,
                         loop_sleep_time=5000,
                     )
-                    backoff = 5
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.warning(
-                        "sync_forever crashed (%s), retrying in %ds",
-                        exc, backoff,
-                    )
+                    # sync_forever never returns normally: reset the backoff after a
+                    # healthy stretch, or occasional crashes add up to 5-minute gaps.
+                    if time.monotonic() - started > 300:
+                        backoff = 5
+                    logger.warning("sync_forever crashed (%s), retrying in %ds", exc, backoff)
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 300)
         finally:
+            if self._emit_task:
+                self._emit_task.cancel()
             self._cancel_auto_advance()
             self._cancel_advance_watchdog()
             self._cancel_worker_playback_wait()
