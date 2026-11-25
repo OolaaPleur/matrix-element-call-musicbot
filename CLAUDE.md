@@ -39,6 +39,8 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - Listens for messages starting with the configured prefix (`!m` by default) and dispatches to handlers in `_handle_command_internal`; command keys are bare words (`"play"`, `"skip"`, etc.) and aliases map short forms (`"p"` → `"play"`)
 - Each command runs in its own task (`_run_command`, since 2026-11-25): a long `play` download no longer holds up the nio sync loop (so `skip`/`stop` get through), and an exception replies "❌ Command failed" instead of crashing `sync_forever`. `play` and `load` are serialized by `_play_request_lock`; queue changes take `_playback_lock`
 - E2EE start-up: `_restore_e2ee_login()` (whoami retried 5×, then the stored `data/device_id`; `restore_login`, key upload if needed) runs **before** the first sync so it can decrypt; `_finish_e2ee_setup()` (keys_query, cross-signing, room keys) after it
+- Call audio: `[worker] stereo` (2 channels, ffmpeg `-ac 2`) and `audio_bitrate_kbps` (Opus `maxBitrate` via `TrackPublishOptions({audioEncoding})`; 0 = LiveKit default); DTX is always off (it thins out quiet passages). Live config: stereo, 128 kbps since 2026-11-25.
+- Commands added 2026-11-25: `search` (top 5, one flat yt-dlp run; `play <n>`/`playnext <n>` pick one for 5 min, per room), `playnext` (single track to the queue front), `remove <n>`.
 - Manages an in-memory `AudioQueue` (current track + deque of upcoming tracks)
 - Drives the Node.js call worker via `CallWorkerProcess`
 - Uses a priority `asyncio.PriorityQueue` for outbound messages: `critical=0`, `normal=1`, `noisy=2`

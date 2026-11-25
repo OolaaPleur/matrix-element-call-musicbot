@@ -192,6 +192,8 @@ class IntegratedBot:
                 "WORKER_LOG_MAX_BYTES": str(config.WORKER_LOG_MAX_BYTES),
                 "WORKER_LOG_BACKUPS": str(config.WORKER_LOG_BACKUPS),
                 "WORKER_MEMBERSHIP_MODE": config.WORKER_MEMBERSHIP_MODE,
+                "WORKER_AUDIO_CHANNELS": "2" if config.WORKER_STEREO else "1",
+                "WORKER_AUDIO_BITRATE_KBPS": str(config.WORKER_AUDIO_BITRATE_KBPS),
             },
         )
         self.call_worker.set_event_handler(self._on_call_worker_event)
@@ -639,6 +641,8 @@ class IntegratedBot:
             f"Worker heartbeat: {self.config.WORKER_HEARTBEAT_INTERVAL:.1f}s",
             f"Stop-timeout recovery: {self.config.WORKER_STOP_TIMEOUT_RESTART_THRESHOLD}",
             f"Worker membership mode: {self.config.WORKER_MEMBERSHIP_MODE}",
+            f"Call audio: {'stereo' if self.config.WORKER_STEREO else 'mono'}, "
+            f"{f'{self.config.WORKER_AUDIO_BITRATE_KBPS} kbps' if self.config.WORKER_AUDIO_BITRATE_KBPS else 'default bitrate'}",
             f"Playlist max tracks/request: {self.config.PLAYLIST_MAX_TRACKS_PER_REQUEST}",
             f"Playlist background concurrency: {self.config.PLAYLIST_BACKGROUND_LOAD_CONCURRENCY}",
             f"History limit: {self.config.HISTORY_LIMIT}",

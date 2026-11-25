@@ -23,7 +23,10 @@ dotenv.config({ path: path.resolve(process.cwd(), "../.env"), quiet: true });
 dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: false, quiet: true });
 
 const SAMPLE_RATE = 48_000;
-const CHANNELS = 1;
+// 2 = stereo music; 1 = mono (what the worker always sent before).
+const CHANNELS = process.env.WORKER_AUDIO_CHANNELS === "2" ? 2 : 1;
+// Opus max bitrate in kbps; 0 leaves LiveKit's default (tuned for voice).
+const AUDIO_BITRATE_KBPS = parseNonNegativeIntEnv("WORKER_AUDIO_BITRATE_KBPS", 0);
 const FRAME_MS = 20;
 const SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_MS) / 1000;
 const FRAME_BYTES = SAMPLES_PER_FRAME * CHANNELS * 2;
@@ -505,10 +508,18 @@ class CallWorker {
 
         this.audioSource = new AudioSource(SAMPLE_RATE, CHANNELS);
         this.audioTrack = LocalAudioTrack.createAudioTrack("musicbot-audio", this.audioSource);
-        const options = new TrackPublishOptions();
+        // DTX (discontinuous transmission) is for speech: it thins out quiet
+        // passages, which in music are part of the track.
+        const options = new TrackPublishOptions({
+            dtx: false,
+            ...(AUDIO_BITRATE_KBPS > 0 ? { audioEncoding: { maxBitrate: BigInt(AUDIO_BITRATE_KBPS * 1000) } } : {}),
+        });
         options.source = TrackSource.SOURCE_MICROPHONE;
         const publication = await room.localParticipant.publishTrack(this.audioTrack, options);
-        logLine(`published local audio track sid=${publication?.trackSid || "unknown"}`);
+        logLine(
+            `published local audio track sid=${publication?.trackSid || "unknown"} channels=${CHANNELS} ` +
+                `bitrate=${AUDIO_BITRATE_KBPS ? `${AUDIO_BITRATE_KBPS}kbps` : "default"} dtx=off`,
+        );
 
         try {
             await Promise.race([
@@ -580,7 +591,7 @@ class CallWorker {
             ffmpegArgs.push("-af", audioFilters.join(","));
             logLine(`ffmpeg audio filters=${audioFilters.join(",")}`);
         }
-        ffmpegArgs.push("-f", "s16le", "-ac", "1", "-ar", "48000", "pipe:1");
+        ffmpegArgs.push("-f", "s16le", "-ac", String(CHANNELS), "-ar", String(SAMPLE_RATE), "pipe:1");
 
         const ffmpeg = spawn(
             "ffmpeg",

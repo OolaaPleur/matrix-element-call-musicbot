@@ -41,6 +41,8 @@ class Config:
         "worker.skip_cooldown_seconds": 1.0,
         "worker.stop_timeout_restart_threshold": 2,
         "worker.membership_mode": "legacy",
+        "worker.stereo": False,
+        "worker.audio_bitrate_kbps": 0,
         "worker.log_max_bytes": 2_000_000,
         "worker.log_backups": 5,
         "playlist.max_tracks_per_request": 50,
@@ -256,6 +258,11 @@ class Config:
             or self.DEFAULTS["worker.membership_mode"]
         )
         self.WORKER_MEMBERSHIP_MODE = self.WORKER_MEMBERSHIP_MODE.strip().lower()
+        # Music, not voice: two channels and a fixed Opus bitrate (0 = LiveKit's default).
+        self.WORKER_STEREO = self._get_bool("WORKER_STEREO", "worker", "stereo", self.DEFAULTS["worker.stereo"])
+        self.WORKER_AUDIO_BITRATE_KBPS = self._get_nonnegative_int(
+            "WORKER_AUDIO_BITRATE_KBPS", "worker", "audio_bitrate_kbps", self.DEFAULTS["worker.audio_bitrate_kbps"]
+        )
         if self.WORKER_MEMBERSHIP_MODE not in {"matrix2_auto", "matrix2", "legacy"}:
             raise ValueError(
                 "WORKER_MEMBERSHIP_MODE/worker.membership_mode must be one of: matrix2_auto, matrix2, legacy"
@@ -446,6 +453,8 @@ class Config:
             f"worker.skip_cooldown_seconds = {cls.DEFAULTS['worker.skip_cooldown_seconds']}",
             f"worker.stop_timeout_restart_threshold = {cls.DEFAULTS['worker.stop_timeout_restart_threshold']}",
             "worker.membership_mode = matrix2_auto | matrix2 | legacy",
+            "worker.stereo = true | false (two-channel audio in the call)",
+            "worker.audio_bitrate_kbps = 0 (LiveKit default) or e.g. 128",
             f"worker.log_max_bytes = {cls.DEFAULTS['worker.log_max_bytes']}",
             f"worker.log_backups = {cls.DEFAULTS['worker.log_backups']}",
             f"playlist.max_tracks_per_request = {cls.DEFAULTS['playlist.max_tracks_per_request']}",
