@@ -55,6 +55,7 @@ _PER_DEVICE_CALL_STATE_KEY_RE = re.compile(r"^_(@[^:]+:[^_]+)_")
 _DATA_DIR = Path(__file__).resolve().parent / "data"
 SEARCH_RESULTS = 5
 SEARCH_RESULTS_TTL = 300
+EMIT_YIELD_MAX_SECONDS = 15  # scrobbler events wait at most this long for chat replies
 QUEUE_PENDING_SHOWN = 10  # not yet loaded playlist tracks listed by `queue`  # seconds `play <n>` refers to the last search
 
 
@@ -392,6 +393,12 @@ class IntegratedBot:
         while True:
             room_id, event_type, content, details = await self._emit_queue.get()
             kind = event_type.rsplit(".", 1)[-1]
+            # Chat replies first: both share the account's send rate limit, and a
+            # scrobbler event can wait a few seconds while a command's reply can't.
+            try:
+                await asyncio.wait_for(self._message_queue.join(), timeout=EMIT_YIELD_MAX_SECONDS)
+            except asyncio.TimeoutError:
+                pass
             try:
                 # Unverified devices: nio counts only devices verified in nio itself,
                 # cross-signing doesn't count; refusing them would drop the event.
