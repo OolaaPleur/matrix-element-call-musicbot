@@ -5,7 +5,7 @@ const fs = require("fs");
 
 const dotenv = require("dotenv");
 const { createClient, ClientEvent, MemoryStore } = require("matrix-js-sdk");
-const { PersistentCryptoStore } = require("./crypto-store");
+const { PersistentCryptoStore, UnreadableCryptoStoreError } = require("./crypto-store");
 const { logger: rootLogger } = require("matrix-js-sdk/lib/logger");
 const { MatrixRTCSessionManager, MatrixRTCSessionEvent } = require("matrix-js-sdk/lib/matrixrtc");
 const {
@@ -945,17 +945,51 @@ async function loadE2eeSetup(homeserver, userId) {
     }
     if (device.user_id !== userId) return off(`worker device belongs to ${device.user_id}, not ${userId}`);
     if (!/^[0-9a-f]{64}$/.test(device.store_key || "")) return off("worker device file has no valid store_key");
-    try {
-        const whoami = await fetchWhoAmI(homeserver, device.access_token);
-        if (whoami.device_id !== device.device_id) {
-            return off(`worker token is for device ${whoami.device_id}, file says ${device.device_id}`);
+    // Only a dead token or another device means "no E2EE". A homeserver hiccup
+    // must not drop a call that should be encrypted to plain audio: retry, then
+    // fail the worker start (the bot retries it).
+    for (const delayMs of [2_000, 5_000, 10_000, 0]) {
+        try {
+            const whoami = await fetchWhoAmI(homeserver, device.access_token);
+            if (whoami.device_id !== device.device_id) {
+                return off(`worker token is for device ${whoami.device_id}, file says ${device.device_id}`);
+            }
+            break;
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (/whoami failed: 401/.test(message)) {
+                return off(`worker device token rejected (${message}); recreate it with scripts/create_worker_device.py --replace`);
+            }
+            if (!delayMs) throw new Error(`worker device check failed: ${message}`);
+            logLine(`worker device check failed (${message}), retrying in ${delayMs / 1000}s`);
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const hint = /whoami failed: 401/.test(message) ? "; recreate it with scripts/create_worker_device.py --replace" : "";
-        return off(`worker device check failed (${message})${hint}`);
     }
-    return { deviceId: device.device_id, accessToken: device.access_token, storeKey: Buffer.from(device.store_key, "hex") };
+
+    const cryptoStore = new PersistentCryptoStore(WORKER_CRYPTO_STORE_FILE, logLine, device.device_id);
+    let restored;
+    try {
+        restored = await cryptoStore.load();
+    } catch (err) {
+        if (!(err instanceof UnreadableCryptoStoreError)) throw err;
+        return off(`${err.message}; recreate the device with scripts/create_worker_device.py --replace`);
+    }
+    activeCryptoStore = cryptoStore;
+    // Until main() installs its own handlers: a stop during startup must not
+    // lose a just-created Olm account.
+    const earlyExit = () => {
+        void cryptoStore.flush().catch(() => {}).finally(() => process.exit(0));
+    };
+    process.once("SIGTERM", earlyExit);
+    process.once("SIGINT", earlyExit);
+    return {
+        deviceId: device.device_id,
+        accessToken: device.access_token,
+        storeKey: Buffer.from(device.store_key, "hex"),
+        cryptoStore,
+        restored,
+        earlyExit,
+    };
 }
 
 async function main() {
@@ -1005,10 +1039,9 @@ async function main() {
         deviceId,
         store: new MemoryStore(),
     });
-    let cryptoStore = null;
+    const cryptoStore = e2ee ? e2ee.cryptoStore : null;
     if (e2ee) {
-        cryptoStore = new PersistentCryptoStore(WORKER_CRYPTO_STORE_FILE, logLine);
-        const restored = await cryptoStore.load();
+        const restored = e2ee.restored;
         await client.initRustCrypto({
             useIndexedDB: true,
             cryptoDatabasePrefix: "musicbot-worker",
@@ -1166,6 +1199,10 @@ async function main() {
         logStream.end();
     };
 
+    if (e2ee) {
+        process.removeListener("SIGTERM", e2ee.earlyExit);
+        process.removeListener("SIGINT", e2ee.earlyExit);
+    }
     process.once("SIGTERM", () => {
         void shutdown().finally(() => process.exit(0));
     });
@@ -1261,6 +1298,8 @@ async function main() {
 
 // Set in main() once the MatrixRTC session exists.
 let fatalCleanup = null;
+// Set as soon as the crypto store is loaded, for a startup failure before that.
+let activeCryptoStore = null;
 
 main().catch(async (error) => {
     emit({ event: "error", message: error instanceof Error ? error.message : String(error) });
@@ -1271,6 +1310,8 @@ main().catch(async (error) => {
         } catch (cleanupError) {
             logLine(`fatal cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
         }
+    } else if (activeCryptoStore) {
+        await activeCryptoStore.flush().catch((err) => logLine(`crypto store: final snapshot FAILED ${err}`));
     }
     // The Matrix client keeps the event loop alive, so exitCode alone would leave
     // a half-started worker running (in the call, but without LiveKit audio).

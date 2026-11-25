@@ -8,6 +8,12 @@
 //
 // The rust store encrypts its values with the storageKey we pass to
 // initRustCrypto; the snapshot file is additionally written 0600.
+//
+// The snapshot records the device it belongs to. A snapshot of another device
+// (the device was replaced) is moved aside and a fresh store started. An
+// unreadable one is moved to <file>.unreadable and load() fails until the device
+// is replaced: a fresh Olm account under the same device id would clash with
+// the keys the server already has for it.
 
 "use strict";
 
@@ -89,10 +95,13 @@ async function restoreDatabase({ name, version, stores }) {
     db.close();
 }
 
+class UnreadableCryptoStoreError extends Error {}
+
 class PersistentCryptoStore {
-    constructor(file, logLine) {
+    constructor(file, logLine, deviceId) {
         this.file = file;
         this.logLine = logLine;
+        this.deviceId = deviceId;
         this.timer = null;
         this.saving = null;
         this.dirty = false;
@@ -101,12 +110,17 @@ class PersistentCryptoStore {
 
     /** Load the snapshot (if any) and start watching for writes. Returns the number of databases restored. */
     async load() {
+        const unreadable = `${this.file}.unreadable`;
+        if (fs.existsSync(unreadable)) {
+            throw new UnreadableCryptoStoreError(`${unreadable} exists (an earlier snapshot could not be read)`);
+        }
         let restored = 0;
-        if (fs.existsSync(this.file)) {
-            const snapshot = v8.deserialize(fs.readFileSync(this.file));
-            if (snapshot?.format !== SNAPSHOT_FORMAT || !Array.isArray(snapshot.databases)) {
-                throw new Error(`unknown crypto store snapshot format in ${this.file}`);
-            }
+        const snapshot = this.readSnapshot(unreadable);
+        if (snapshot && snapshot.deviceId !== this.deviceId) {
+            const aside = `${this.file}.device-${snapshot.deviceId}`;
+            fs.renameSync(this.file, aside);
+            this.logLine(`crypto store: snapshot is for device ${snapshot.deviceId}, not ${this.deviceId}; moved to ${aside}, starting fresh`);
+        } else if (snapshot) {
             for (const database of snapshot.databases) {
                 await restoreDatabase(database);
                 restored += 1;
@@ -114,6 +128,23 @@ class PersistentCryptoStore {
         }
         this.watchWrites();
         return restored;
+    }
+
+    readSnapshot(unreadable) {
+        if (!fs.existsSync(this.file)) return null;
+        let snapshot;
+        try {
+            snapshot = v8.deserialize(fs.readFileSync(this.file));
+        } catch (err) {
+            snapshot = { error: err instanceof Error ? err.message : String(err) };
+        }
+        if (snapshot?.format !== SNAPSHOT_FORMAT || !Array.isArray(snapshot.databases) || !snapshot.deviceId) {
+            fs.renameSync(this.file, unreadable);
+            throw new UnreadableCryptoStoreError(
+                `cannot read crypto store snapshot ${this.file} (${snapshot?.error || "unknown format"}); moved to ${unreadable}`,
+            );
+        }
+        return snapshot;
     }
 
     watchWrites() {
@@ -155,7 +186,7 @@ class PersistentCryptoStore {
         const infos = await indexedDB.databases();
         const databases = [];
         for (const { name } of infos) databases.push(await dumpDatabase(name));
-        const data = v8.serialize({ format: SNAPSHOT_FORMAT, savedAt: Date.now(), databases });
+        const data = v8.serialize({ format: SNAPSHOT_FORMAT, deviceId: this.deviceId, savedAt: Date.now(), databases });
 
         const dir = path.dirname(this.file);
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -189,4 +220,4 @@ class PersistentCryptoStore {
     }
 }
 
-module.exports = { PersistentCryptoStore };
+module.exports = { PersistentCryptoStore, UnreadableCryptoStoreError };

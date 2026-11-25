@@ -53,6 +53,7 @@ With `[worker] e2ee = true` the call worker encrypts the music like Element Call
 1. **A device of its own.** The keys travel as Olm-encrypted to-device messages, and the bot's own device belongs to matrix-nio, so the worker logs in as a second device of the same account. Create it once (asks for the bot's password, writes `data/worker_device.json`, mode 600):
 
    ```bash
+   systemctl --user stop matrix-musicbot      # the script refuses while the bot runs
    scripts/create_worker_device.py            # --replace for a new one
    ```
 
@@ -68,7 +69,7 @@ With `[worker] e2ee = true` the call worker encrypts the music like Element Call
 
 The worker also moves its own frame cryptors to each new key index by hand (`FrameCryptor.setKeyIndex`), working around [livekit/rust-sdks#1676](https://github.com/livekit/rust-sdks/issues/1676) until a release ships [#1677](https://github.com/livekit/rust-sdks/pull/1677). `WORKER_E2EE_SET_KEY_INDEX=false` turns that off.
 
-If the device file or the rtc-node fix is missing, or the device's token is rejected, the worker logs why (`e2ee OFF, playing unencrypted: …`), says so in the room, and plays unencrypted.
+If the device file or the rtc-node fix is missing, the device's token is rejected, or the crypto store can't be read, the worker logs why (`e2ee OFF, playing unencrypted: …`), says so in the room, and plays unencrypted (an unreadable store needs `create_worker_device.py --replace`). A homeserver that is merely unreachable doesn't switch E2EE off: the worker start fails and is retried.
 
 ## Current Limitations
 

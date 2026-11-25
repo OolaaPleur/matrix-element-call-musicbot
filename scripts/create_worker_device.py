@@ -7,7 +7,8 @@ Logs in once with the password (new device "musicbot call worker") and writes
 data/worker_device.json (0600): user_id, device_id, access_token and a random
 key that encrypts the worker's crypto store. Prints neither the token nor the key.
 The worker cross-signs the device with data/cross_signing_keys.json on its
-first start.
+first start. Stop the bot first: a running worker would write the old
+device's crypto store back after this script removed it.
 
     scripts/create_worker_device.py            # once
     scripts/create_worker_device.py --replace  # new device; logs the old one out
@@ -24,7 +25,30 @@ DISPLAY_NAME = "musicbot call worker"
 
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("--replace", action="store_true", help="replace an existing worker device")
+parser.add_argument("--force", action="store_true", help="run even though the bot seems to be running")
 args = parser.parse_args()
+
+
+def bot_processes():
+    """PIDs of this checkout's bot (main.py) or call worker (join_call.js)."""
+    pids = []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            cmdline = (proc / "cmdline").read_bytes().split(b"\0")
+            cwd = Path(os.readlink(proc / "cwd"))
+        except OSError:
+            continue
+        if cwd != ROOT and ROOT not in cwd.parents:
+            continue
+        if any(arg.endswith((b"main.py", b"join_call.js")) for arg in cmdline):
+            pids.append(int(proc.name))
+    return pids
+
+
+running = bot_processes()
+if running and not args.force:
+    sys.exit(f"the bot seems to be running (pid {', '.join(map(str, running))}); stop it first "
+             "(e.g. systemctl --user stop matrix-musicbot) or pass --force")
 
 raw = tomllib.loads(CONFIG.read_text())
 cfg = raw.get("matrix", raw)
@@ -81,8 +105,8 @@ finally:
     os.close(fd)
 os.replace(tmp, DEVICE_FILE)
 # The old store holds the old device's Olm identity: useless for the new one.
-if STORE_FILE.exists():
-    STORE_FILE.unlink()
+for stale in [STORE_FILE, *DATA.glob(STORE_FILE.name + ".*")]:
+    stale.unlink(missing_ok=True)
 print(f"worker device {resp['device_id']} written to {DEVICE_FILE.relative_to(ROOT)}")
 
 if old:
