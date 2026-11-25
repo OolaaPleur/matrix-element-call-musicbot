@@ -78,7 +78,7 @@ If the device file or the rtc-node fix is missing, the device's token is rejecte
 
 ## Companion Scrobbler Bot
 
-This bot emits custom Matrix room events (`dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished`) that a companion scrobbler bot can listen for to scrobble played tracks to Last.fm.
+With `[bot] scrobbler_events = true` this bot emits custom Matrix room events (`dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished`) that a companion scrobbler bot can listen for to scrobble played tracks to Last.fm. They are off by default: each track costs two extra sends against the homeserver's rate limit.
 
 Companion scrobbler: **https://github.com/OolaaPleur/matrix-element-call-scrobbler**
 

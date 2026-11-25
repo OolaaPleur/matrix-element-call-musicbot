@@ -387,6 +387,8 @@ class IntegratedBot:
         )
 
     def _queue_emit(self, room_id: str, event_type: str, content: dict, details: str):
+        if not self.config.SCROBBLER_EVENTS:
+            return
         self._emit_queue.put_nowait((room_id, event_type, content, details))
 
     async def _emit_loop(self):
@@ -637,6 +639,7 @@ class IntegratedBot:
             f"Normalize audio: {'On' if self.config.NORMALIZE_AUDIO else 'Off'}",
             f"Fade-in: {self.config.FADE_IN_MS}ms",
             f"Volume: {self.config.VOLUME_PERCENT}%",
+            f"Scrobbler events: {'On' if self.config.SCROBBLER_EVENTS else 'Off'}",
             f"Cache mode: {self.config.AUDIO_CACHE_MODE}",
             f"Cache max size: {self._format_bytes(self.config.AUDIO_CACHE_MAX_BYTES)}",
             f"Delete after playback: {'On' if self.config.AUDIO_CACHE_DELETE_AFTER_PLAYBACK else 'Off'}",

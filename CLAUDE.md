@@ -48,7 +48,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - Drives the Node.js call worker via `CallWorkerProcess`
 - Uses a priority `asyncio.PriorityQueue` for outbound messages: `critical=0`, `normal=1`, `noisy=2`
 - `QUIET_MODE=true` (default) suppresses `noisy` messages; `critical` always sends
-- Emits `dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished` custom room events for the companion scrobbler bot; `_active_play` tracks the in-flight play state (`_start_play_tracking`); `_emit_track_finished` has a double-emit guard and computes played time without pauses (`_played_seconds`)
+- Emits `dev.elementcall.musicbot.track_started` / `dev.elementcall.musicbot.track_finished` custom room events for the companion scrobbler bot when `bot.scrobbler_events` is on (default off; `_queue_emit` drops them otherwise, and `_emit_loop` lets queued chat replies go first since both share the send rate limit); `_active_play` tracks the in-flight play state (`_start_play_tracking`); `_emit_track_finished` has a double-emit guard and computes played time without pauses (`_played_seconds`)
 - Those events go through `_emit_queue` → one `_emit_loop` task (in order, 120 s timeout, `ignore_unverified_devices=True`). Before 2026-11-25 they were sent inline under `_playback_lock` with `ignore_unverified_devices=False`: nio retries 429/timeouts forever, so a slow send stalled playback (2026-11-15 16:51, ~4 min, rescued by the advance watchdog), and a room-key re-share to a new device (nio counts only nio-verified devices, cross-signing doesn't count) raised and dropped the event
 
 ### Node.js call worker (`call_worker/src/join_call.js`)

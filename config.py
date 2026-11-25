@@ -17,6 +17,7 @@ class Config:
         "bot.language": "en",
         "bot.history_limit": 10,
         "bot.auto_accept_invites": False,
+        "bot.scrobbler_events": False,
         "paths.audio_dir": "/tmp/musicbot_audio",
         "paths.saved_queues_file": "data/saved_queues.json",
         "audio.auto_advance_buffer": 2.0,
@@ -271,6 +272,12 @@ class Config:
             "WORKER_AUDIO_BITRATE_KBPS", "worker", "audio_bitrate_kbps", self.DEFAULTS["worker.audio_bitrate_kbps"]
         )
         self.WORKER_E2EE = self._get_bool("WORKER_E2EE", "worker", "e2ee", self.DEFAULTS["worker.e2ee"])
+        # track_started/track_finished room events for the companion scrobbler bot.
+        # Off by default: two extra sends per track count against the homeserver's
+        # rate limit, which delays command replies after a few quick skips.
+        self.SCROBBLER_EVENTS = self._get_bool(
+            "SCROBBLER_EVENTS", "bot", "scrobbler_events", self.DEFAULTS["bot.scrobbler_events"]
+        )
         if self.WORKER_MEMBERSHIP_MODE not in {"matrix2_auto", "matrix2", "legacy"}:
             raise ValueError(
                 "WORKER_MEMBERSHIP_MODE/worker.membership_mode must be one of: matrix2_auto, matrix2, legacy"
@@ -432,6 +439,7 @@ class Config:
             f"bot.command_prefix = {cls.DEFAULTS['bot.command_prefix']}",
             f"bot.history_limit = {cls.DEFAULTS['bot.history_limit']}",
             f"bot.auto_accept_invites = {str(cls.DEFAULTS['bot.auto_accept_invites']).lower()}",
+            f"bot.scrobbler_events = {str(cls.DEFAULTS['bot.scrobbler_events']).lower()}",
             "bot.auto_accept_invites_from = [] (accept all when auto_accept_invites is true)",
             f"paths.audio_dir = {cls.DEFAULTS['paths.audio_dir']}",
             f"paths.saved_queues_file = {cls.DEFAULTS['paths.saved_queues_file']}",

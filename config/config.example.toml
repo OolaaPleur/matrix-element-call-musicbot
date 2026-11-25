@@ -19,6 +19,10 @@ language = "en"          # default language of chat messages (locales/*.toml, lo
 history_limit = 10
 auto_accept_invites = false
 # auto_accept_invites_from = ["@youruser:matrix.org"]  # if set, only accept invites from these users (overrides auto_accept_invites)
+# Send track_started/track_finished room events for the companion scrobbler bot.
+# Leave off without it: two extra sends per track use up the homeserver's rate
+# limit and slow down command replies after a few quick skips.
+scrobbler_events = false
 
 [paths]
 audio_dir = "/tmp/musicbot_audio"
