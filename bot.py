@@ -124,6 +124,10 @@ class IntegratedBot:
         self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID, store_path=str(_store_dir) + "/")
         self.client.access_token = config.MATRIX_ACCESS_TOKEN
         self.first_sync_done = False
+        # Commands sent before this process started are not run: a sync after a
+        # restart can hand back already handled messages (seen 2026-11-25: three
+        # old `skip`s answered "join call first" right after a restart).
+        self._started_at_ms = int(time.time() * 1000)
 
         self.audio_queue = AudioQueue(
             config.AUDIO_DIR,
@@ -2620,6 +2624,9 @@ class IntegratedBot:
 
     async def on_message(self, room: MatrixRoom, event: RoomMessageText):
         if event.sender == self.config.MATRIX_USER_ID or not self.first_sync_done:
+            return
+        if event.server_timestamp < self._started_at_ms:
+            logger.info("Ignoring a message sent before startup (%s)", event.event_id)
             return
 
         if event.body.strip().startswith(self._prefix):
