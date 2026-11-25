@@ -40,7 +40,7 @@ cache_delete_on_shutdown = true
 search_mode = "fast" # fast | accurate
 search_timeout_seconds = 8.0
 extractor_retries = 1
-download_format = "wav" # wav | mp3 | ogg(vorbis) | m4a | opus
+download_format = "opus" # opus | wav | mp3 | ogg(vorbis) | m4a; opus is what YouTube serves: stored without re-encoding, smallest files
 audio_quality = "best" # best | medium | worst
 # ytdlp_cookies_file = "/path/to/cookies.txt"  # optional: pass cookies to yt-dlp for age-restricted/bot-gated content
 stream_first_idle = true
@@ -48,7 +48,7 @@ stream_prefetch_current = true
 stream_retry_to_file_on_fail = true
 
 auto_advance_buffer = 2.0
-preroll_silence = 1.0
+preroll_silence = 0.0 # seconds of silence added before each track; anything above 0 re-encodes the file
 normalize_audio = false
 fade_in_ms = 120
 volume_percent = 100 # 0-200

@@ -38,7 +38,7 @@ class AudioQueue:
         self,
         audio_dir: Path,
         auto_advance_buffer: float = 2.0,
-        preroll_silence: float = 8.0,
+        preroll_silence: float = 0.0,
         cache_mode: str = "size_lru",
         cache_max_bytes: int = 1_073_741_824,
         cache_delete_after_playback: bool = True,
@@ -46,7 +46,7 @@ class AudioQueue:
         search_mode: str = "fast",
         search_timeout_seconds: float = 8.0,
         extractor_retries: int = 1,
-        download_format: str = "wav",
+        download_format: str = "opus",
         audio_quality: str = "best",
         cookies_file: Optional[str] = None,
         proxy: str = "",
@@ -69,9 +69,9 @@ class AudioQueue:
             self.search_mode = "fast"
         self.search_timeout_seconds = max(0.0, float(search_timeout_seconds))
         self.extractor_retries = max(0, int(extractor_retries))
-        self.download_format = str(download_format or "wav").strip().lower()
+        self.download_format = str(download_format or "opus").strip().lower()
         if self.download_format not in {"wav", "mp3", "ogg", "m4a", "opus"}:
-            self.download_format = "wav"
+            self.download_format = "opus"
         self.ytdlp_audio_format = YTDLP_AUDIO_FORMAT_MAP[self.download_format]
         self.audio_quality = str(audio_quality or "best").strip().lower()
         if self.audio_quality not in {"best", "medium", "worst"}:
