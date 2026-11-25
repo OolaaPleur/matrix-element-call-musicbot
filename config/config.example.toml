@@ -56,6 +56,10 @@ heartbeat_interval_seconds = 10.0
 skip_cooldown_seconds = 1.0
 stop_timeout_restart_threshold = 2
 membership_mode = "legacy" # legacy | matrix2_auto | matrix2
+# Encrypt call audio (LiveKit media E2EE, as Element Call does). Needs the worker
+# device (scripts/create_worker_device.py) and the rtc-node patch
+# (call_worker/patches/apply-pr768.py); without them the worker plays unencrypted.
+e2ee = false
 log_max_bytes = 2000000
 log_backups = 5
 

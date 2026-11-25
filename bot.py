@@ -197,6 +197,10 @@ class IntegratedBot:
                 "WORKER_MEMBERSHIP_MODE": config.WORKER_MEMBERSHIP_MODE,
                 "WORKER_AUDIO_CHANNELS": "2" if config.WORKER_STEREO else "1",
                 "WORKER_AUDIO_BITRATE_KBPS": str(config.WORKER_AUDIO_BITRATE_KBPS),
+                "WORKER_E2EE": "true" if config.WORKER_E2EE else "false",
+                "WORKER_DEVICE_FILE": str(_DATA_DIR / "worker_device.json"),
+                "WORKER_CRYPTO_STORE_FILE": str(_DATA_DIR / "worker_crypto_store.v8"),
+                "WORKER_CROSS_SIGNING_KEYS_FILE": str(_DATA_DIR / "cross_signing_keys.json"),
             },
         )
         self.call_worker.set_event_handler(self._on_call_worker_event)
@@ -1266,6 +1270,11 @@ class IntegratedBot:
             message = event.get("message")
             if isinstance(message, str) and message:
                 await self.send_message(room_id, self._t(room_id, "worker_notice", message=message))
+            return
+
+        if event_name == "e2ee_unavailable":
+            logger.warning("Call audio E2EE unavailable, playing unencrypted: %s", event.get("reason"))
+            await self.send_message(room_id, "⚠️ Call audio encryption is unavailable; playing unencrypted.")
             return
 
         if event_name == "worker_restart_attempt":

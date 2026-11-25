@@ -5,6 +5,7 @@ const fs = require("fs");
 
 const dotenv = require("dotenv");
 const { createClient, ClientEvent, MemoryStore } = require("matrix-js-sdk");
+const { PersistentCryptoStore } = require("./crypto-store");
 const { logger: rootLogger } = require("matrix-js-sdk/lib/logger");
 const { MatrixRTCSessionManager, MatrixRTCSessionEvent } = require("matrix-js-sdk/lib/matrixrtc");
 const {
@@ -16,6 +17,7 @@ const {
     TrackSource,
     dispose,
 } = require("@livekit/rtc-node");
+const { MediaKeyBridge, e2eeRoomOptions, crossSignOwnDevice, rtcNodeSupportsKeyedE2ee } = require("./e2ee");
 
 rootLogger.setLevel("WARN");
 
@@ -106,9 +108,12 @@ function shouldFallbackStickyJoin(mode, error) {
     return normalized.includes("unsupportedstickyeventsendpointerror") || normalized.includes("sticky events");
 }
 
-function joinRtcSessionWithMode(session, { userId, deviceId, memberId }, livekitTransport, membershipMode) {
+function joinRtcSessionWithMode(session, { userId, deviceId, memberId }, livekitTransport, membershipMode, e2ee) {
     const joinConfig = {
         callIntent: "audio",
+        // Without our own crypto we can't send or receive media keys; js-sdk defaults this to true.
+        manageMediaKeys: Boolean(e2ee),
+        ...(DECLARE_NO_RENDER ? { callCapabilities: [] } : {}),
         unstableSendStickyEvents: useStickyMembershipEvents(membershipMode),
     };
     // matrix-js-sdk >= 45: join(identity, publishedTransports, config); older: joinRTCSession(identity, foci, multiSfuFocus, config)
@@ -123,6 +128,30 @@ function leaveRtcSession(session, timeout) {
     // matrix-js-sdk >= 45 renamed leaveRoomSession() to leave()
     return typeof session.leave === "function" ? session.leave(timeout) : session.leaveRoomSession(timeout);
 }
+
+// Media E2EE (SFrame via LiveKit), keyed by matrix-js-sdk's MatrixRTC encryption
+// manager. The keys travel as Olm-encrypted to-device messages, so the worker
+// needs a Matrix device of its own (not the bot's: nio owns that one's Olm keys),
+// created once by scripts/create_worker_device.py, with a persistent rust crypto
+// store. If anything is missing the worker plays unencrypted and says why.
+const E2EE_REQUESTED = parseBoolEnv("WORKER_E2EE", false);
+// JSON written by scripts/create_worker_device.py: user_id, device_id, access_token, store_key.
+const WORKER_DEVICE_FILE = process.env.WORKER_DEVICE_FILE || "";
+// Snapshot of the worker device's rust crypto store (see crypto-store.js).
+const WORKER_CRYPTO_STORE_FILE = process.env.WORKER_CRYPTO_STORE_FILE || "";
+// Move our frame cryptors to the new key index by hand on every own-key change:
+// works around livekit/rust-sdks#1676 until a release ships #1677.
+const E2EE_SET_KEY_INDEX_WORKAROUND = parseBoolEnv("WORKER_E2EE_SET_KEY_INDEX", true);
+// The bot's cross_signing_keys.json; if set, the worker device is signed with it on start.
+const CROSS_SIGNING_KEYS_FILE = process.env.WORKER_CROSS_SIGNING_KEYS_FILE || "";
+// Don't clear call memberships of other devices of this account (a test device
+// must not kick the production bot out of a call).
+const SKIP_GHOST_CLEANUP = parseBoolEnv("WORKER_SKIP_GHOST_CLEANUP", false);
+const E2EE_DIAG_INTERVAL_MS = 30_000;
+// Publish `capabilities: []` in our membership (MSC4196: "if capabilities is set,
+// the absence of a value signals that the client doesn't support" it), i.e. we
+// render neither audio nor video. Informational only: no client acts on it yet.
+const DECLARE_NO_RENDER = parseBoolEnv("WORKER_DECLARE_NO_RENDER", false);
 
 const audioSettings = {
     normalizeAudio: parseBoolEnv("NORMALIZE_AUDIO", false),
@@ -406,7 +435,7 @@ async function getLivekitConfig(client, livekitServiceUrl, roomId, membership, m
 }
 
 class CallWorker {
-    constructor({ matrixClient, rtcSession, livekitServiceUrl, roomId, userId, deviceId, membershipMode }) {
+    constructor({ matrixClient, rtcSession, livekitServiceUrl, roomId, userId, deviceId, membershipMode, keyBridge }) {
         this.matrixClient = matrixClient;
         this.rtcSession = rtcSession;
         this.livekitServiceUrl = livekitServiceUrl;
@@ -414,6 +443,8 @@ class CallWorker {
         this.userId = userId;
         this.deviceId = deviceId;
         this.membershipMode = membershipMode;
+        this.keyBridge = keyBridge || null;
+        this.e2eeDiagTimer = null;
 
         this.livekitRoom = null;
         this.audioSource = null;
@@ -511,9 +542,26 @@ class CallWorker {
         // The bot only publishes music; it never needs other participants' audio,
         // so don't receive their tracks at all.
         const roomOptions = { autoSubscribe: false, dynacast: true };
+        if (this.keyBridge) {
+            roomOptions.encryption = e2eeRoomOptions();
+        }
         const room = new Room();
+        if (this.keyBridge) {
+            room.on("encryptionError", (err) => logLine(`e2ee encryptionError: ${err instanceof Error ? err.message : err}`));
+            room.on("participantEncryptionStatusChanged", (isEncrypted, participant) => {
+                logLine(`e2ee participant encryption status identity=${participant?.identity} encrypted=${isEncrypted}`);
+            });
+        }
         await room.connect(config.url, config.jwt, roomOptions);
-        logLine(`livekit connected auth_mode=${config._auth_mode || "unknown"}`);
+        logLine(
+            `livekit connected auth_mode=${config._auth_mode || "unknown"} e2ee=${this.keyBridge ? "on" : "off"} ` +
+                `local_identity=${room.localParticipant?.identity}`,
+        );
+        if (this.keyBridge) {
+            // Keys that arrived while we were joining the MatrixRTC session.
+            this.keyBridge.attachRoom(room);
+            this.rtcSession.reemitEncryptionKeys();
+        }
 
         this.audioSource = new AudioSource(SAMPLE_RATE, CHANNELS);
         this.audioTrack = LocalAudioTrack.createAudioTrack("musicbot-audio", this.audioSource);
@@ -529,6 +577,14 @@ class CallWorker {
             `published local audio track sid=${publication?.trackSid || "unknown"} channels=${CHANNELS} ` +
                 `bitrate=${AUDIO_BITRATE_KBPS ? `${AUDIO_BITRATE_KBPS}kbps` : "default"} dtx=off`,
         );
+        if (this.keyBridge) {
+            const bridge = this.keyBridge;
+            bridge.logCryptors("after publish");
+            if (E2EE_SET_KEY_INDEX_WORKAROUND && bridge.ownKeyIndex !== null) {
+                bridge.moveOwnCryptors(bridge.ownKeyIndex);
+            }
+            this.e2eeDiagTimer = setInterval(() => bridge.logCryptors("periodic"), E2EE_DIAG_INTERVAL_MS);
+        }
 
         try {
             await Promise.race([
@@ -843,6 +899,10 @@ class CallWorker {
 
     async shutdown() {
         await this.stopPlayback();
+        if (this.e2eeDiagTimer) {
+            clearInterval(this.e2eeDiagTimer);
+            this.e2eeDiagTimer = null;
+        }
 
         if (this.audioTrack) {
             await this.audioTrack.close();
@@ -857,6 +917,45 @@ class CallWorker {
 
         await leaveRtcSession(this.rtcSession, 5_000);
     }
+}
+
+// Everything media E2EE needs, or null (with the reason logged and reported to
+// the bot) so the worker joins unencrypted instead of not at all.
+async function loadE2eeSetup(homeserver, userId) {
+    const off = (reason) => {
+        logLine(`e2ee OFF, playing unencrypted: ${reason}`);
+        emit({ event: "e2ee_unavailable", reason });
+        return null;
+    };
+    if (!rtcNodeSupportsKeyedE2ee()) {
+        return off(
+            "@livekit/rtc-node lacks livekit/node-sdks#768 (setKey with a key); " +
+                "run `python3 patches/apply-pr768.py` in call_worker/ after installing dependencies",
+        );
+    }
+    if (!WORKER_DEVICE_FILE || !fs.existsSync(WORKER_DEVICE_FILE)) {
+        return off(`no worker device file (${WORKER_DEVICE_FILE || "WORKER_DEVICE_FILE unset"}); run scripts/create_worker_device.py`);
+    }
+    if (!WORKER_CRYPTO_STORE_FILE) return off("WORKER_CRYPTO_STORE_FILE unset");
+    let device;
+    try {
+        device = JSON.parse(fs.readFileSync(WORKER_DEVICE_FILE, "utf-8"));
+    } catch (err) {
+        return off(`cannot read ${WORKER_DEVICE_FILE}: ${err instanceof Error ? err.message : err}`);
+    }
+    if (device.user_id !== userId) return off(`worker device belongs to ${device.user_id}, not ${userId}`);
+    if (!/^[0-9a-f]{64}$/.test(device.store_key || "")) return off("worker device file has no valid store_key");
+    try {
+        const whoami = await fetchWhoAmI(homeserver, device.access_token);
+        if (whoami.device_id !== device.device_id) {
+            return off(`worker token is for device ${whoami.device_id}, file says ${device.device_id}`);
+        }
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const hint = /whoami failed: 401/.test(message) ? "; recreate it with scripts/create_worker_device.py --replace" : "";
+        return off(`worker device check failed (${message})${hint}`);
+    }
+    return { deviceId: device.device_id, accessToken: device.access_token, storeKey: Buffer.from(device.store_key, "hex") };
 }
 
 async function main() {
@@ -876,11 +975,12 @@ async function main() {
 
     const homeserver = process.env.MATRIX_HOMESERVER;
     const userId = process.env.MATRIX_USER_ID;
-    const accessToken = process.env.MATRIX_ACCESS_TOKEN;
     const membershipMode = parseMembershipModeEnv();
 
+    const e2ee = E2EE_REQUESTED ? await loadE2eeSetup(homeserver, userId) : null;
+    const accessToken = e2ee ? e2ee.accessToken : process.env.MATRIX_ACCESS_TOKEN;
     const whoami = await fetchWhoAmI(homeserver, accessToken);
-    const deviceId = process.env.MATRIX_DEVICE_ID || whoami.device_id;
+    const deviceId = e2ee ? e2ee.deviceId : process.env.MATRIX_DEVICE_ID || whoami.device_id;
     if (!deviceId) {
         throw new Error("Could not determine MATRIX_DEVICE_ID (whoami returned no device_id)");
     }
@@ -893,7 +993,10 @@ async function main() {
     logLine(
         `audio settings normalize=${audioSettings.normalizeAudio} fade_in_ms=${audioSettings.fadeInMs} volume_percent=${audioSettings.volumePercent}`,
     );
-    logLine(`worker start room=${roomId} membership_mode=${membershipMode}`);
+    logLine(
+        `worker start room=${roomId} membership_mode=${membershipMode} device=${deviceId} e2ee=${e2ee ? "on" : "off"} ` +
+            `set_key_index_workaround=${E2EE_SET_KEY_INDEX_WORKAROUND} skip_ghost_cleanup=${SKIP_GHOST_CLEANUP}`,
+    );
 
     const client = createClient({
         baseUrl: homeserver,
@@ -902,8 +1005,31 @@ async function main() {
         deviceId,
         store: new MemoryStore(),
     });
+    let cryptoStore = null;
+    if (e2ee) {
+        cryptoStore = new PersistentCryptoStore(WORKER_CRYPTO_STORE_FILE, logLine);
+        const restored = await cryptoStore.load();
+        await client.initRustCrypto({
+            useIndexedDB: true,
+            cryptoDatabasePrefix: "musicbot-worker",
+            storageKey: e2ee.storeKey,
+        });
+        await cryptoStore.save(); // a new device's Olm account must not exist only in memory
+        const ownKeys = await client.getCrypto().getOwnDeviceKeys();
+        logLine(
+            `e2ee rust crypto ready ed25519=${ownKeys.ed25519.slice(0, 8)}… ` +
+                `store=${restored ? "restored" : "new"}`,
+        );
+    }
     client.startClient({ initialSyncLimit: 1, lazyLoadMembers: true });
     await waitForPrepared(client, 45_000);
+    if (e2ee && CROSS_SIGNING_KEYS_FILE) {
+        try {
+            await crossSignOwnDevice({ homeserver, accessToken, userId, deviceId, keysFile: CROSS_SIGNING_KEYS_FILE, logLine });
+        } catch (err) {
+            logLine(`cross-signing: FAILED ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
 
     const room = await client.joinRoom(roomId);
     const sessionManager = new MatrixRTCSessionManager(rootLogger, client, {
@@ -914,7 +1040,8 @@ async function main() {
 
     // Clear any stale call memberships left by previous crashed sessions with different device IDs.
     // m.call.member state keys: legacy = `_${userId}_${deviceId}`, matrix2 = `${userId}:${deviceId}`
-    try {
+    if (SKIP_GHOST_CLEANUP) logLine("ghost cleanup skipped (WORKER_SKIP_GHOST_CLEANUP)");
+    else try {
         const roomState = room.currentState;
         const staleKeys = [];
         for (const evType of ["m.call.member", "org.matrix.msc3401.call.member"]) {
@@ -945,6 +1072,7 @@ async function main() {
     fatalCleanup = async () => {
         await leaveRtcSession(session, 5_000);
         client.stopClient();
+        if (cryptoStore) await cryptoStore.flush();
     };
 
     let effectiveMembershipMode = membershipMode;
@@ -963,7 +1091,22 @@ async function main() {
         livekit_service_url: livekitServiceUrl,
     };
 
-    joinRtcSessionWithMode(session, { userId, deviceId, memberId }, livekitTransport, effectiveMembershipMode);
+    let keyBridge = null;
+    if (e2ee) {
+        // Backend identity js-sdk uses for livekit_service_url transports; it is
+        // also the LiveKit identity the /sfu/get JWT carries.
+        keyBridge = new MediaKeyBridge({
+            logLine,
+            emit,
+            ownIdentity: `${userId}:${deviceId}`,
+            setKeyIndexWorkaround: E2EE_SET_KEY_INDEX_WORKAROUND,
+        });
+        session.on(MatrixRTCSessionEvent.EncryptionKeyChanged, (key, index, membership, backendIdentity) => {
+            keyBridge.onEncryptionKeyChanged(key, index, membership, backendIdentity);
+        });
+    }
+
+    joinRtcSessionWithMode(session, { userId, deviceId, memberId }, livekitTransport, effectiveMembershipMode, e2ee);
 
     try {
         await waitForJoinState(session, 20_000);
@@ -984,7 +1127,7 @@ async function main() {
         }
 
         effectiveMembershipMode = "legacy";
-        joinRtcSessionWithMode(session, { userId, deviceId, memberId }, livekitTransport, effectiveMembershipMode);
+        joinRtcSessionWithMode(session, { userId, deviceId, memberId }, livekitTransport, effectiveMembershipMode, e2ee);
         await waitForJoinState(session, 20_000);
         await waitForJoinOutcome(session, userId, deviceId, 20_000);
     }
@@ -997,6 +1140,7 @@ async function main() {
         userId,
         deviceId,
         membershipMode: effectiveMembershipMode,
+        keyBridge,
     });
 
     await worker.connectLivekit();
@@ -1014,6 +1158,9 @@ async function main() {
         await worker.shutdown();
         sessionManager.stop();
         client.stopClient();
+        if (cryptoStore) {
+            await cryptoStore.flush().catch((err) => logLine(`crypto store: final snapshot FAILED ${err}`));
+        }
         await dispose();
         emit({ event: "left", roomId });
         logStream.end();

@@ -16,6 +16,7 @@ python3 -m venv venv && source venv/bin/activate
 # ../matrix-element-call-common must be cloned as a sibling directory first
 pip install -r requirements.txt
 bun install --cwd call_worker --frozen-lockfile
+python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see below
 cp config/config.example.toml config/config.toml
 # The active config is config.toml at the ROOT of the project, NOT config/config.toml.
 # Always edit the root-level config.toml — config/config.toml is just the example template.
@@ -80,8 +81,9 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - `normalize_media_url()` prepends `https://` when the user omits the scheme (e.g. `youtube.com/watch?v=...` → `https://youtube.com/watch?v=...`), so bare-domain URLs are treated as URLs not search queries
 
 ### E2EE + Cross-signing
-- Matrix room E2EE (chat messages, commands) is **fully supported** via `matrix-nio`. Call audio (LiveKit) is **not** SFrame-encrypted — see the call worker section for why.
-- The worker connects to LiveKit with `autoSubscribe: false` (since 2026-11-15; was `true`): it only publishes music and never receives other participants' tracks. Humans' audio stays E2EE between their Element clients; the bot's unencrypted track carries only the music.
+- Matrix room E2EE (chat messages, commands) is **fully supported** via `matrix-nio`.
+- Call audio E2EE: `[worker] e2ee = true` (default false). The worker runs as its own device (`data/worker_device.json`, made by `scripts/create_worker_device.py`; the bot's device is nio's), with matrix-js-sdk rust crypto persisted by `call_worker/src/crypto-store.js` (fake-indexeddb snapshot in `data/worker_crypto_store.v8`). `call_worker/src/e2ee.js` feeds MatrixRTC `EncryptionKeyChanged` keys to the LiveKit key provider and re-points own frame cryptors with `setKeyIndex` on every own-key change (livekit/rust-sdks#1676; drop when a release has #1677). Needs `call_worker/patches/apply-pr768.py` after every `bun install` (livekit/node-sdks#768; drop when released). Anything missing → `e2ee_unavailable` event, room notice, unencrypted playback. With E2EE off the worker joins with `manageMediaKeys: false`.
+- The worker connects to LiveKit with `autoSubscribe: false` (since 2026-11-15; was `true`): it only publishes music and never receives other participants' tracks.
 - E2EE via `matrix-nio`'s `SqliteStore` in `data/crypto_store/`
 - On startup, `matrix_bot_common.cross_signing:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs (from the shared [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) package)
 - Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored)
@@ -113,6 +115,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 ## Data Files (gitignored)
 - `data/cross_signing_keys.json` — bot's cross-signing private keys (chmod 600)
 - `data/crypto_store/` — matrix-nio E2EE SQLite stores (one per device_id)
+- `data/worker_device.json`, `data/worker_crypto_store.v8` — the call worker's own device and its crypto store (call audio E2EE)
 - `data/device_id` — persisted Matrix device ID
 - `data/saved_queues.json` — saved queue presets
 - `logs/` — rotating log files; `musicbot.clean.log` filters MatrixRTC noise

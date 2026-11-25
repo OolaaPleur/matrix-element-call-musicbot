@@ -44,6 +44,7 @@ class Config:
         "worker.membership_mode": "legacy",
         "worker.stereo": False,
         "worker.audio_bitrate_kbps": 0,
+        "worker.e2ee": False,
         "worker.log_max_bytes": 2_000_000,
         "worker.log_backups": 5,
         "playlist.max_tracks_per_request": 50,
@@ -269,6 +270,7 @@ class Config:
         self.WORKER_AUDIO_BITRATE_KBPS = self._get_nonnegative_int(
             "WORKER_AUDIO_BITRATE_KBPS", "worker", "audio_bitrate_kbps", self.DEFAULTS["worker.audio_bitrate_kbps"]
         )
+        self.WORKER_E2EE = self._get_bool("WORKER_E2EE", "worker", "e2ee", self.DEFAULTS["worker.e2ee"])
         if self.WORKER_MEMBERSHIP_MODE not in {"matrix2_auto", "matrix2", "legacy"}:
             raise ValueError(
                 "WORKER_MEMBERSHIP_MODE/worker.membership_mode must be one of: matrix2_auto, matrix2, legacy"
@@ -461,6 +463,7 @@ class Config:
             "worker.membership_mode = matrix2_auto | matrix2 | legacy",
             "worker.stereo = true | false (two-channel audio in the call)",
             "worker.audio_bitrate_kbps = 0 (LiveKit default) or e.g. 128",
+            f"worker.e2ee = {str(cls.DEFAULTS['worker.e2ee']).lower()}",
             f"worker.log_max_bytes = {cls.DEFAULTS['worker.log_max_bytes']}",
             f"worker.log_backups = {cls.DEFAULTS['worker.log_backups']}",
             f"playlist.max_tracks_per_request = {cls.DEFAULTS['playlist.max_tracks_per_request']}",

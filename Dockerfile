@@ -24,7 +24,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY --from=docker.io/oven/bun:1.4.3-debian /usr/local/bin/bun /usr/local/bin/bun
 COPY call_worker/package.json call_worker/bun.lock /app/call_worker/
-RUN bun install --cwd /app/call_worker --frozen-lockfile --production
+COPY call_worker/patches /app/call_worker/patches
+RUN bun install --cwd /app/call_worker --frozen-lockfile --production \
+    && python3 /app/call_worker/patches/apply-pr768.py
 
 COPY . /app
 

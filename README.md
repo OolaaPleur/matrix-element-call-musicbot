@@ -44,12 +44,35 @@ command_prefix = "!m"   # change to anything, e.g. "!music" or "!dj"
 
 Matrix room E2EE is **fully supported** — the bot decrypts encrypted commands and encrypts its own messages. Cross-signing is bootstrapped automatically on startup so the bot user shows as verified in Element.
 
-> [!NOTE]
-> The call audio stream is **not** SFrame/E2EE encrypted. The LiveKit Rust SDK (`@livekit/rtc-node`) and browser JS SDK (`livekit-client`) have incompatible key derivation, causing `"maximum ratchet attempts exceeded"` on every audio frame. Since the bot streams public music this has no practical impact. Matrix room messages remain E2EE encrypted regardless. The bot does not subscribe to other participants' tracks (`autoSubscribe: false`), so it never receives anyone's voice.
+The bot does not subscribe to other participants' tracks (`autoSubscribe: false`), so it never receives anyone's voice.
+
+### Call audio E2EE (optional)
+
+With `[worker] e2ee = true` the call worker encrypts the music like Element Call does (LiveKit SFrame, per-participant keys exchanged over Olm). It needs:
+
+1. **A device of its own.** The keys travel as Olm-encrypted to-device messages, and the bot's own device belongs to matrix-nio, so the worker logs in as a second device of the same account. Create it once (asks for the bot's password, writes `data/worker_device.json`, mode 600):
+
+   ```bash
+   scripts/create_worker_device.py            # --replace for a new one
+   ```
+
+   Its Olm identity is kept in `data/worker_crypto_store.v8` (matrix-js-sdk rust crypto on [fake-indexeddb](https://github.com/dumbmatter/fakeIndexedDB), snapshotted to disk; no native modules). The worker cross-signs it with `data/cross_signing_keys.json` on start.
+
+2. **A fix in `@livekit/rtc-node`.** Released versions (1.2.x) can't take a key from the application ([livekit/node-sdks#768](https://github.com/livekit/node-sdks/pull/768)). Apply it after every `bun install`:
+
+   ```bash
+   python3 call_worker/patches/apply-pr768.py
+   ```
+
+   The script patches the installed `dist/` files, is idempotent, and fails loudly on an rtc-node version it doesn't know. Drop it once a release contains #768.
+
+The worker also moves its own frame cryptors to each new key index by hand (`FrameCryptor.setKeyIndex`), working around [livekit/rust-sdks#1676](https://github.com/livekit/rust-sdks/issues/1676) until a release ships [#1677](https://github.com/livekit/rust-sdks/pull/1677). `WORKER_E2EE_SET_KEY_INDEX=false` turns that off.
+
+If the device file or the rtc-node fix is missing, or the device's token is rejected, the worker logs why (`e2ee OFF, playing unencrypted: …`), says so in the room, and plays unencrypted.
 
 ## Current Limitations
 
-- Call audio is not SFrame/E2EE encrypted (LiveKit SDK incompatibility — see above)
+- Call audio E2EE needs a patched `@livekit/rtc-node` until livekit/node-sdks#768 is released (see above)
 - Single active playback session at a time (no sharding/multi-room playback yet)
 
 ## Companion Scrobbler Bot
@@ -228,6 +251,7 @@ source venv/bin/activate
 
 pip install -r requirements.txt   # resolves ../matrix-element-call-common automatically
 bun install --cwd call_worker --frozen-lockfile
+python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see below
 
 cp config/config.example.toml config.toml
 # Edit config.toml
@@ -253,6 +277,7 @@ py -3 -m venv venv
 
 pip install -r requirements.txt
 bun install --cwd call_worker --frozen-lockfile
+python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see below
 
 Copy-Item .\config\config.example.toml .\config.toml
 # Edit .\config.toml
