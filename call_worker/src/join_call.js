@@ -50,6 +50,15 @@ function normalizeVolumePercent(value) {
     return bounded;
 }
 
+// Volume percent -> linear gain. Loudness is heard logarithmically, so up to
+// 100% the gain is the square of the fraction (50% = -12 dB, about "half as
+// loud"; 10% = -40 dB): steps feel even and low volumes are easy to set.
+// Above 100% it stays linear (200% = +6 dB), as louder would just clip.
+function volumePercentToGain(percent) {
+    const fraction = normalizeVolumePercent(percent) / 100;
+    return fraction <= 1 ? fraction * fraction : fraction;
+}
+
 function parseBoolEnv(name, defaultValue) {
     const raw = process.env[name];
     if (!raw) return defaultValue;
@@ -414,13 +423,13 @@ class CallWorker {
         this.playbackQueue = Promise.resolve();
         this.paused = false;
         this.resumeWaiters = [];
-        this.currentVolumeGain = normalizeVolumePercent(audioSettings.volumePercent) / 100;
+        this.currentVolumeGain = volumePercentToGain(audioSettings.volumePercent);
         this.targetVolumeGain = this.currentVolumeGain;
     }
 
     setVolumePercent(value) {
         const normalizedPercent = normalizeVolumePercent(value);
-        this.targetVolumeGain = normalizedPercent / 100;
+        this.targetVolumeGain = volumePercentToGain(normalizedPercent);
         audioSettings.volumePercent = normalizedPercent;
         logLine(`volume target updated percent=${normalizedPercent} gain=${this.targetVolumeGain.toFixed(3)}`);
     }
@@ -559,7 +568,7 @@ class CallWorker {
         });
         logLine(
             `play begin ${isStream ? "url" : "file"}=${sourceLabel} title=${title || ""} ` +
-                `volume_target=${(this.targetVolumeGain * 100).toFixed(0)}%`,
+                `volume=${audioSettings.volumePercent}% gain=${this.targetVolumeGain.toFixed(3)}`,
         );
 
         const audioFilters = [];

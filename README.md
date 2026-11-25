@@ -172,7 +172,7 @@ Long-term fix:
 - `!m audio` (`a`) — show current audio settings
 - `!m normalize` (`norm`) `on|off` — toggle normalization
 - `!m fadein` (`fi`) `<ms>` — set fade-in (0–5000)
-- `!m volume` (`v`) `<0-200>` — set playback volume percent
+- `!m volume` (`v`) `<0-200>` — set playback volume percent (logarithmic up to 100: 50% = −12 dB, about half as loud; linear above, 200% = +6 dB)
 - `!m status` (`st`) — show bot status
 - `!m diag` (`d`) — show diagnostics
 - `!m config` (`cfg`) — show active config

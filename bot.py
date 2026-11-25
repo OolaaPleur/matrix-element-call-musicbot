@@ -603,7 +603,7 @@ class IntegratedBot:
             f"{p} audio (a) - show current audio settings\n"
             f"{p} normalize (norm) on|off - toggle normalization\n"
             f"{p} fadein (fi) <ms> - set fade-in (0-5000)\n"
-            f"{p} volume (v) <0-200> - set playback volume percent\n"
+            f"{p} volume (v) <0-200> - set volume (logarithmic: 50 = about half as loud)\n"
             f"{p} status (st) - show bot status\n"
             f"{p} diag (d) - show diagnostics\n"
             f"{p} config (cfg) - show active config\n"
