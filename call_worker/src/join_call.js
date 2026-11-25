@@ -1093,8 +1093,10 @@ async function main() {
                 const content = stateEvent.getContent();
                 const sender = stateEvent.getSender();
                 if (sender !== userId) continue;
-                // Skip if already empty/expired
-                if (!content || (Array.isArray(content.memberships) && content.memberships.length === 0)) continue;
+                // Skip if already empty/expired ({} is what a cleared one holds: without
+                // this every start re-sent all of them and hit the homeserver rate limit)
+                if (!content || Object.keys(content).length === 0) continue;
+                if (Array.isArray(content.memberships) && content.memberships.length === 0) continue;
                 // Skip if this is our current device (we'll overwrite it via joinRTCSession)
                 if (stateKey === `_${userId}_${deviceId}` || stateKey === `${userId}:${deviceId}`) continue;
                 staleKeys.push({ evType, stateKey });
