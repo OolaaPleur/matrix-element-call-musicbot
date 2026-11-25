@@ -14,7 +14,7 @@ from typing import Awaitable, Callable, Optional
 import uuid
 from urllib.parse import urlparse
 
-from nio import AsyncClient, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText, UnknownEvent
+from nio import AsyncClient, AsyncClientConfig, InviteMemberEvent, MatrixRoom, MegolmEvent, RoomMessageText, UnknownEvent
 from matrix_bot_common.cross_signing import ensure_cross_signing
 
 from i18n import Translations
@@ -121,12 +121,21 @@ class IntegratedBot:
         self._prefix = config.COMMAND_PREFIX
         _store_dir = Path(__file__).resolve().parent / "data" / "crypto_store"
         _store_dir.mkdir(parents=True, exist_ok=True)
-        self.client = AsyncClient(config.MATRIX_HOMESERVER, config.MATRIX_USER_ID, store_path=str(_store_dir) + "/")
+        # Keep the sync position across restarts: without it every start is a
+        # fresh initial sync, and a stale answer to that (its next_batch behind
+        # the messages the previous process already handled) hands those
+        # messages back as new on the next sync.
+        self.client = AsyncClient(
+            config.MATRIX_HOMESERVER,
+            config.MATRIX_USER_ID,
+            store_path=str(_store_dir) + "/",
+            config=AsyncClientConfig(store_sync_tokens=True),
+        )
         self.client.access_token = config.MATRIX_ACCESS_TOKEN
         self.first_sync_done = False
-        # Commands sent before this process started are not run: a sync after a
-        # restart can hand back already handled messages (seen 2026-11-25: three
-        # old `skip`s answered "join call first" right after a restart).
+        # Commands sent before this process started are not run (second line of
+        # defence next to the stored sync token; seen 2026-11-25: three old
+        # `skip`s answered "join call first" right after a restart).
         self._started_at_ms = int(time.time() * 1000)
 
         self.audio_queue = AudioQueue(
