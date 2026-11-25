@@ -30,8 +30,20 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Install Node deps (call_worker)
-        run: npm ci --prefix call_worker
+        run: |
+          bun install --cwd call_worker --frozen-lockfile
+          python call_worker/patches/apply-pr768.py
+
+      - name: Checks
+        run: |
+          python -m compileall -q *.py scripts
+          python -c "from pathlib import Path; from i18n import Translations; Translations(Path('locales'), Path('locales/custom'))"
+          node --check call_worker/src/join_call.js
+          (cd call_worker && node test/crypto-store.test.cjs && node test/pr768-encode.test.cjs)
 
   docker:
     needs: checks
