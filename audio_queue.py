@@ -396,6 +396,11 @@ class AudioQueue:
         cmd = [
             dlp_cmd,
             "--no-playlist",
+            # A channel or tab URL is a playlist that --no-playlist doesn't reduce:
+            # without -I 1 yt-dlp extracts every video in it (minutes, hundreds of
+            # requests) only for the first one to be used.
+            "--playlist-items",
+            "1",
             "--dump-single-json",
             "-f",
             YTDLP_STREAM_FORMAT,
@@ -550,6 +555,13 @@ class AudioQueue:
         entries = data.get("entries")
         if not isinstance(entries, list) or not entries:
             return True, {"is_playlist": False, "title": None, "entries": []}
+        # A channel URL lists its tabs (/videos, /streams, /shorts), each a nested
+        # playlist: queue the videos of the first tab, not the tabs themselves.
+        tabs = [e for e in entries if isinstance(e, dict) and e.get("_type") == "playlist"]
+        if tabs:
+            entries = next((tab["entries"] for tab in tabs if isinstance(tab.get("entries"), list) and tab["entries"]), [])
+            if not entries:
+                return True, {"is_playlist": False, "title": None, "entries": []}
 
         urls: list[str] = []
         seen: set[str] = set()
@@ -705,6 +717,8 @@ class AudioQueue:
             cmd += ["--dump-json", "--no-simulate"]
         cmd += [
             "--no-playlist",
+            "--playlist-items",
+            "1",  # never more than one file, whatever the URL turns out to be
             "-x",
             "--audio-format",
             self.ytdlp_audio_format,
