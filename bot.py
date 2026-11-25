@@ -56,6 +56,7 @@ _DATA_DIR = Path(__file__).resolve().parent / "data"
 SEARCH_RESULTS = 5
 SEARCH_RESULTS_TTL = 300
 EMIT_YIELD_MAX_SECONDS = 15  # scrobbler events wait at most this long for chat replies
+LOADER_POLL_SECONDS = 0.5  # how soon the playlist loader notices the queue ran dry
 QUEUE_PENDING_SHOWN = 10  # not yet loaded playlist tracks listed by `queue`  # seconds `play <n>` refers to the last search
 
 
@@ -1043,6 +1044,10 @@ class IntegratedBot:
             logger.info("Cancelled worker playback watcher")
         self._worker_playback_task = None
 
+    def _background_load_alive(self) -> bool:
+        """A playlist/saved queue is still being loaded: the queue isn't really empty."""
+        return self._background_load_task is not None and not self._background_load_task.done()
+
     def _cancel_background_load(self):
         if self._background_load_task and not self._background_load_task.done():
             self._background_load_task.cancel()
@@ -1236,7 +1241,7 @@ class IntegratedBot:
             # The next source stays in `pending` meanwhile, so `queue` still lists it.
             while len(self.audio_queue.queue) >= 1:
                 try:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(LOADER_POLL_SECONDS)
                 except asyncio.CancelledError:
                     return
             if not pending:
@@ -2040,7 +2045,7 @@ class IntegratedBot:
             return
 
         if command == "queue":
-            if not self.audio_queue.queue and not self.audio_queue.current:
+            if not self.audio_queue.queue and not self.audio_queue.current and not self._background_load_alive():
                 await self.send_message(room.room_id, self._t(room.room_id, "queue_empty"))
                 return
 
@@ -2085,8 +2090,7 @@ class IntegratedBot:
             lines.append(self._t(room.room_id, "queue_total", total=total_label))
 
             pending = self._pending_sources
-            loader_alive = self._background_load_task is not None and not self._background_load_task.done()
-            if pending and loader_alive:
+            if pending and self._background_load_alive():
                 not_loaded = list(pending)
                 lines.append("")
                 lines.append(self._t(room.room_id, "queue_pending_header", count=len(not_loaded)))
@@ -2430,6 +2434,7 @@ class IntegratedBot:
             async with self._playback_lock:
                 if not self.audio_queue.current and not self.audio_queue.queue:
                     queue_empty = True
+                    still_loading = self._background_load_alive()
                 else:
                     self._last_skip_at = now
                     asyncio.create_task(self.send_message(room.room_id, self._t(room.room_id, "skipping"), priority="noisy"))
@@ -2439,7 +2444,9 @@ class IntegratedBot:
                     await self.call_worker.stop_playback(wait_for_terminal=False)
                     await self._advance_queue(room.room_id, force_next=True, pre_stop=False)
             if queue_empty:
-                await self.send_message(room.room_id, self._t(room.room_id, "queue_empty"))
+                # Skipped again while the next playlist track is still loading.
+                key = "loading_next_track" if still_loading else "queue_empty"
+                await self.send_message(room.room_id, self._t(room.room_id, key))
             return
 
         if command in ("pause", "resume"):
