@@ -1,0 +1,195 @@
+# Your overrides of the bot's English messages. This file is applied on top
+# of locales/en.toml: only uncommented keys take effect.
+#
+# To change a message, remove the "# " at the start of its line(s) (every
+# line of a multi-line one like help) and edit the text. Keep the
+# {placeholders} (you may drop some, not add new ones); a leading ❌/⚠️ marks
+# the message as urgent. Takes effect after a restart.
+#
+# A new language: data/locales/<code>.toml with its own language_name and the
+# keys of locales/en.toml; "!m lang" will list it.
+
+# track_already_playing_queued = "ℹ️ That track is already playing or queued. Use `{prefix} loop` if you want repeats."
+# now_playing = "▶️ Now playing: {title}"
+# synced_current_track_call = "▶️ Synced current track to call: {title}"
+# joined_call_but_could = "⚠️ Joined call, but could not sync current track: {exc}"
+# already_joined_room_call = "ℹ️ Already joined this room call"
+# call_worker_not_found = "❌ Call worker not found. Expected file: call_worker/src/join_call.js"
+# failed_join_element_call = "❌ Failed to join Element Call: {exc}"
+# joined_element_call = "✅ Joined Element Call"
+# join_call_first_with = "ℹ️ Join call first with `{prefix} join` before `{command_name}`."
+# stream_failed_retrying_from = "⚠️ Stream failed. Retrying from cached file..."
+# stream_failed_file_fallback = "❌ Stream failed and the file fallback did not work either"
+# playback_worker_error = "❌ Playback worker error: {exc}"
+# failed_load_from = "⚠️ Failed to load {failures} from {source_label} `{collection_name}`"
+# call_worker_disconnected_reconnecting = "⚠️ Call worker disconnected. Reconnecting (attempt {attempt}, retry in {backoff}s)..."
+# call_worker_reconnected = "✅ Call worker reconnected"
+# call_worker_could_not = "❌ Call worker could not recover. Use `{prefix} join` to reconnect."
+# playback_backend_stalled_recovering = "⚠️ Playback backend stalled. Recovering call worker..."
+# call_worker_recovered = "✅ Call worker recovered"
+# loading_next_track = "⏳ Loading the next track…"
+# queue_empty = "📭 Queue is empty"
+# playback_paused_because_bot = "ℹ️ Playback paused because bot is not joined in this room call. Use `{prefix} join`."
+# failed_play_call = "❌ Failed to play in call: {exc}"
+# unknown_command_help = "❓ Unknown command. Use `{prefix} help`"
+# already_joined_call = "ℹ️ Already joined call in {target}"
+# failed_join_call = "❌ Failed to join call in {target}: {exc}"
+# not_currently_call = "ℹ️ Not currently in a call"
+# left_element_call = "✅ Left Element Call"
+# usage_search_query = "❌ Usage: {prefix} search <query>"
+# search_failed = "❌ Search failed: {results}"
+# no_results_found = "❌ No results found"
+# usage_remove_position_from = "❌ Usage: {prefix} remove <position from {prefix} queue>"
+# no_track_at_position = "❌ No track at position {position}"
+# usage_audio_url_query = "❌ Usage: {prefix} {command} <audio-url-or-query>"
+# spotify_searching_youtube = "🎧 Spotify: {display} — searching YouTube"
+# playnext_takes_single_track = "❌ `{prefix} playnext` takes a single track, not a playlist"
+# could_not_find_playable = "❌ Could not find playable tracks in that playlist"
+# all_tracks_from_are = "ℹ️ All tracks from `{playlist_name}` are already playing or queued"
+# loading_playlist = "📥 Loading playlist `{playlist_name}`..."
+# searching = "🔎 Searching: {args}"
+# downloading = "⬇️ Downloading..."
+# download_failed = "❌ Download failed: {result}"
+# download_failed_invalid_download = "❌ Download failed: invalid download metadata"
+# nothing_currently_playing = "ℹ️ Nothing is currently playing"
+# usage_normalize_on_off = "❌ Usage: {prefix} normalize on|off"
+# usage_fadein_milliseconds = "❌ Usage: {prefix} fadein <milliseconds>"
+# fade_must_integer_number = "❌ Fade-in must be an integer number of milliseconds"
+# fade_must_between_ms = "❌ Fade-in must be between 0 and 5000 ms"
+# fade_set_ms = "✅ Fade-in set to {fade_in_ms}ms"
+# usage_volume = "❌ Usage: {prefix} volume <0-200>"
+# volume_must_integer_between = "❌ Volume must be an integer between 0 and 200"
+# volume_must_between = "❌ Volume must be between 0 and 200"
+# volume_set_applies_immediately = "✅ Volume set to {volume_percent}% (applies immediately)"
+# volume_set = "✅ Volume set to {volume_percent}%"
+# no_playback_history_yet = "ℹ️ No playback history yet"
+# usage_save_name_force = "❌ Usage: {prefix} save <name> [--force]"
+# saved_queue_already_exists = "❌ Saved queue `{name}` already exists. Use `{prefix} save {name} --force` to overwrite."
+# nothing_saveable_queue_right = "❌ Nothing saveable in queue right now"
+# no_saved_queues_room = "📭 No saved queues in this room"
+# usage_deletequeue_name = "❌ Usage: {prefix} deletequeue <name>"
+# saved_queue_not_found = "❌ Saved queue not found: {name}"
+# deleted_saved_queue = "🗑️ Deleted saved queue `{name}`"
+# usage_renamequeue_old_new = "❌ Usage: {prefix} renamequeue <old> <new>"
+# saved_queue_named_already = "❌ A saved queue named `{new_name}` already exists"
+# failed_rename_saved_queue = "❌ Failed to rename saved queue"
+# renamed = "✏️ Renamed `{old_name}` to `{new_name}`"
+# usage_load_name = "❌ Usage: {prefix} load <name>"
+# saved_queue_empty = "❌ Saved queue `{name}` is empty"
+# skip_already_progress = "ℹ️ Skip already in progress"
+# skipping = "⏭️ Skipping..."
+# nothing_shuffle_fewer_than = "ℹ️ Nothing to shuffle (fewer than 2 upcoming tracks)"
+# loop_on = "✅ Loop on"
+# loop_off = "✅ Loop off"
+# stopped_cleared_queue = "⏹️ Stopped and cleared queue"
+# command_failed = "❌ Command failed: {exc}"
+# now_playing_loop = "▶️ Now playing: {title}{loop_indicator}"
+# worker_notice = "ℹ️ {message}"
+# call_worker_missing = "❌ Call worker not found"
+# joined_call_in = "✅ Joined Element Call in {target}"
+# could_not_load_any = "❌ Could not load any tracks from `{name}`"
+# removed = "🗑️ Removed: {title}"
+# more_tracks_queued = { one = "ℹ️ {count} more track queued, loading one ahead as needed", other = "ℹ️ {count} more tracks queued, loading one ahead as needed" }
+# shuffled_upcoming_tracks = { one = "🔀 Shuffled {count} upcoming track", other = "🔀 Shuffled {count} upcoming tracks" }
+# failed_count = "⚠️ Failed: {failures}"
+# loading_saved_queue = "📥 Loading `{name}`..."
+# spotify_error = "❌ Spotify: {exc}"
+# bot_ready = "🎵 Music Bot ready. Use `{prefix} help` to see commands."
+# search_pick_hint = "`{prefix} play <n>` or `{prefix} playnext <n>` within {minutes} min"
+# playlist_loaded = { one = "✅ Playlist `{name}`: {count} track, loading one ahead as needed", other = "✅ Playlist `{name}`: {count} tracks, loading one ahead as needed" }
+# playlist_skipped_queued = "Skipped, already queued: {count}"
+# playlist_skipped_limit = "Skipped over the limit of {limit} per request: {count}"
+# playlist_failed = "Failed: {count}"
+# queued = "✅ Queued: {title}"
+# queued_next = "✅ Queued next: {title}"
+# queued_position = "Position: {position}"
+# starts_in = "Starts in: {eta}"
+# up_next = "Next: {title}"
+# queue_header = "🎵 Queue"
+# looping = "🔁 (looping)"
+# now_prefix = "Now:"
+# eta_in = "in {eta}"
+# queue_total = "Total: {total}"
+# on = "On"
+# off = "Off"
+# audio_settings = """
+# 🎚️ Audio
+# Normalize: {normalize}
+# Fade-in: {fade_in_ms} ms
+# Volume: {volume}%
+# Cache mode: {cache_mode}
+# Cache max: {cache_max}
+# Delete after playback: {delete_after}
+# Delete on shutdown: {delete_on_shutdown}
+# Download format: {download_format}
+# Stream first when idle: {stream_first}
+# Prefetch the current stream as a file: {stream_prefetch}"""
+# normalize_set = "✅ Normalize audio: {state}"
+# history_header = "🕘 Recent playback"
+# history_line = "{index}. {title} [{duration}] at {time}"
+# queue_saved = { one = "✅ Saved queue `{name}` with {count} track", other = "✅ Saved queue `{name}` with {count} tracks" }
+# queue_saved_skipped = { one = "Skipped {count} track that can't be saved", other = "Skipped {count} tracks that can't be saved" }
+# saved_queue_line = { one = "- {name} ({count} track, {total})", other = "- {name} ({count} tracks, {total})" }
+# saved_queues_header = "💾 Saved queues:"
+# active = "Active"
+# inactive = "Inactive"
+# status_online = "✅ Bot online"
+# status_worker = "Worker: {state}"
+# status_queue = { one = "Queue: {count} track", other = "Queue: {count} tracks" }
+# status_loop = "Loop: {state}"
+# status_timer = "Auto-advance timer: {state}"
+# status_preroll = "Pre-roll: {seconds:.1f} s"
+# status_normalize = "Normalize: {state}"
+# status_fade_in = "Fade-in: {fade_in_ms} ms"
+# status_volume = "Volume: {volume}%"
+# status_language = "Language: {language}"
+# status_room = "Room: {room}"
+# status_current = "Current: {title}"
+# help = """
+# 🎵 Commands  (prefix: {prefix})
+#
+# Playback
+# {prefix} help (h) - show this help
+# {prefix} lang [code] - show or set this room's language
+# {prefix} join (j) - join Element Call in this room
+# {prefix} leave (lv) - leave current Element Call
+# {prefix} play (p) <url-or-query> - add track and auto-join call if needed
+# {prefix} playnext (pn) <url-or-query> - add track to the front of the queue
+# {prefix} search (sr) <query> - show {results} results; then {prefix} play <n> / {prefix} playnext <n>
+# {prefix} queue (q) - show queue with ETA
+# {prefix} remove (rm) <n> - remove track n of the queue
+# {prefix} nowplaying (np) - show current track
+# {prefix} skip (s) - skip current track
+# {prefix} pause (ps) - pause; again to resume
+# {prefix} resume (rs) - resume after pause
+# {prefix} stop (x) - stop playback and clear queue
+# {prefix} loop (lp) - toggle loop mode
+# {prefix} shuffle (sh, random) - shuffle the upcoming tracks
+# {prefix} history (hist) - show recent playback history
+#
+# Saved Queues
+# {prefix} save (sv) <name> [--force] - save current+upcoming queue
+# {prefix} load (ld) <name> - load a saved queue and auto-join call if needed
+# {prefix} queues (qs) - list saved queues
+# {prefix} deletequeue (dq) <name> - delete a saved queue
+# {prefix} renamequeue (rq) <old> <new> - rename a saved queue
+#
+# Audio & Info
+# {prefix} audio (a) - show current audio settings
+# {prefix} normalize (norm) on|off - toggle normalization
+# {prefix} fadein (fi) <ms> - set fade-in (0-5000)
+# {prefix} volume (v) <0-200> - set volume (logarithmic: 50 = about half as loud)
+# {prefix} status (st) - show bot status
+# {prefix} diag (d) - show diagnostics
+# {prefix} config (cfg) - show active config
+# {prefix} defaults (df) - show default config values"""
+# nothing_playing = "ℹ️ Nothing is playing"
+# paused = "⏸️ Paused. `{prefix} pause` or `{prefix} resume` to continue"
+# not_paused = "ℹ️ Not paused"
+# resumed = "▶️ Resumed"
+# lang_current = """
+# 🌐 Language here: {language}. Available: {available}
+# `{prefix} lang <code>` to change, `{prefix} lang default` for the config default ({default})."""
+# lang_set = "🌐 Language set to {language}"
+# lang_unknown = "❌ Unknown language `{code}`. Available: {available}"
+# lang_reset = "🌐 Language reset to the default ({language})"

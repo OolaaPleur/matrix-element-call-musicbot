@@ -4,7 +4,9 @@ config/*
 !config/.gitkeep
 !config/config.example.toml
 logs/
-data/
+data/*
+# Your own translations live here and are tracked (all keys commented out by default)
+!data/locales/
 __pycache__/
 *.pyc
 call_worker/call_worker.log

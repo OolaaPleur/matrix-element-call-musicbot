@@ -1,0 +1,195 @@
+# Ваши правки русских сообщений бота. Этот файл накладывается поверх
+# locales/ru.toml: действует только то, что раскомментировано.
+#
+# Чтобы поменять сообщение: уберите "# " в начале его строки (у многострочных,
+# как help, во всех строках) и поправьте текст. Подстановки в {скобках}
+# оставляйте как есть, лишние можно убрать. ❌/⚠️ в начале строки помечают
+# сообщение как срочное. Применяется после перезапуска бота.
+#
+# Новый язык: файл data/locales/<код>.toml со своим language_name и ключами
+# из locales/en.toml; бот покажет его в "!m lang".
+
+# track_already_playing_queued = "ℹ️ Этот трек уже играет или стоит в очереди. Для повтора есть `{prefix} loop`."
+# now_playing = "▶️ Сейчас играет: {title}"
+# synced_current_track_call = "▶️ Текущий трек снова идёт в звонок: {title}"
+# joined_call_but_could = "⚠️ Бот в звонке, но текущий трек запустить не удалось: {exc}"
+# already_joined_room_call = "ℹ️ Бот уже в звонке этой комнаты"
+# call_worker_not_found = "❌ Не найден воркер звонка. Ожидался файл call_worker/src/join_call.js"
+# failed_join_element_call = "❌ Не удалось подключиться к звонку: {exc}"
+# joined_element_call = "✅ Бот в звонке"
+# join_call_first_with = "ℹ️ Сначала подключите бота к звонку: `{prefix} join`, потом `{command_name}`."
+# stream_failed_retrying_from = "⚠️ Поток оборвался. Пробую скачанный файл..."
+# stream_failed_file_fallback = "❌ Поток оборвался, и скачанный файл тоже не помог"
+# playback_worker_error = "❌ Ошибка воспроизведения: {exc}"
+# failed_load_from = "⚠️ Не удалось загрузить треков из `{collection_name}`: {failures}"
+# call_worker_disconnected_reconnecting = "⚠️ Связь со звонком потеряна. Переподключаюсь (попытка {attempt}, через {backoff} с)..."
+# call_worker_reconnected = "✅ Снова в звонке"
+# call_worker_could_not = "❌ Переподключиться к звонку не удалось. Попробуйте `{prefix} join`."
+# playback_backend_stalled_recovering = "⚠️ Воспроизведение зависло. Перезапускаю воркер звонка..."
+# call_worker_recovered = "✅ Воркер звонка перезапущен"
+# loading_next_track = "⏳ Загружаю следующий трек…"
+# queue_empty = "📭 Очередь пуста"
+# playback_paused_because_bot = "ℹ️ Воспроизведение остановлено: бот не в звонке этой комнаты. Подключите: `{prefix} join`."
+# failed_play_call = "❌ Не удалось включить трек в звонке: {exc}"
+# unknown_command_help = "❓ Неизвестная команда. Список: `{prefix} help`"
+# already_joined_call = "ℹ️ Бот уже в звонке {target}"
+# failed_join_call = "❌ Не удалось подключиться к звонку в {target}: {exc}"
+# not_currently_call = "ℹ️ Бот сейчас не в звонке"
+# left_element_call = "✅ Бот вышел из звонка"
+# usage_search_query = "❌ Использование: {prefix} search <запрос>"
+# search_failed = "❌ Поиск не удался: {results}"
+# no_results_found = "❌ Ничего не найдено"
+# usage_remove_position_from = "❌ Использование: {prefix} remove <номер из {prefix} queue>"
+# no_track_at_position = "❌ В очереди нет трека под номером {position}"
+# usage_audio_url_query = "❌ Использование: {prefix} {command} <ссылка или запрос>"
+# spotify_searching_youtube = "🎧 Spotify: {display} — ищу на YouTube"
+# playnext_takes_single_track = "❌ `{prefix} playnext` добавляет один трек, а не плейлист"
+# could_not_find_playable = "❌ В этом плейлисте не нашлось треков, которые можно сыграть"
+# all_tracks_from_are = "ℹ️ Все треки из `{playlist_name}` уже играют или стоят в очереди"
+# loading_playlist = "📥 Загружаю плейлист `{playlist_name}`..."
+# searching = "🔎 Ищу: {args}"
+# downloading = "⬇️ Скачиваю..."
+# download_failed = "❌ Не удалось скачать: {result}"
+# download_failed_invalid_download = "❌ Не удалось скачать: получены неверные данные о треке"
+# nothing_currently_playing = "ℹ️ Сейчас ничего не играет"
+# usage_normalize_on_off = "❌ Использование: {prefix} normalize on|off"
+# usage_fadein_milliseconds = "❌ Использование: {prefix} fadein <миллисекунды>"
+# fade_must_integer_number = "❌ Нарастание задаётся целым числом миллисекунд"
+# fade_must_between_ms = "❌ Нарастание — от 0 до 5000 мс"
+# fade_set_ms = "✅ Нарастание: {fade_in_ms} мс"
+# usage_volume = "❌ Использование: {prefix} volume <0-200>"
+# volume_must_integer_between = "❌ Громкость — целое число от 0 до 200"
+# volume_must_between = "❌ Громкость — от 0 до 200"
+# volume_set_applies_immediately = "✅ Громкость {volume_percent}% (уже применена)"
+# volume_set = "✅ Громкость {volume_percent}%"
+# no_playback_history_yet = "ℹ️ История пока пуста"
+# usage_save_name_force = "❌ Использование: {prefix} save <имя> [--force]"
+# saved_queue_already_exists = "❌ Очередь `{name}` уже сохранена. Перезаписать: `{prefix} save {name} --force`."
+# nothing_saveable_queue_right = "❌ В очереди сейчас нечего сохранить"
+# no_saved_queues_room = "📭 В этой комнате нет сохранённых очередей"
+# usage_deletequeue_name = "❌ Использование: {prefix} deletequeue <имя>"
+# saved_queue_not_found = "❌ Сохранённая очередь не найдена: {name}"
+# deleted_saved_queue = "🗑️ Сохранённая очередь `{name}` удалена"
+# usage_renamequeue_old_new = "❌ Использование: {prefix} renamequeue <старое имя> <новое имя>"
+# saved_queue_named_already = "❌ Очередь с именем `{new_name}` уже есть"
+# failed_rename_saved_queue = "❌ Не удалось переименовать очередь"
+# renamed = "✏️ `{old_name}` переименована в `{new_name}`"
+# usage_load_name = "❌ Использование: {prefix} load <имя>"
+# saved_queue_empty = "❌ Сохранённая очередь `{name}` пуста"
+# skip_already_progress = "ℹ️ Уже переключаю"
+# skipping = "⏭️ Пропускаю..."
+# nothing_shuffle_fewer_than = "ℹ️ Нечего перемешивать: впереди меньше двух треков"
+# loop_on = "✅ Повтор включён"
+# loop_off = "✅ Повтор выключен"
+# stopped_cleared_queue = "⏹️ Остановлено, очередь очищена"
+# command_failed = "❌ Команда не выполнена: {exc}"
+# now_playing_loop = "▶️ Сейчас играет: {title}{loop_indicator}"
+# worker_notice = "ℹ️ {message}"
+# call_worker_missing = "❌ Не найден воркер звонка"
+# joined_call_in = "✅ Бот в звонке {target}"
+# could_not_load_any = "❌ Не удалось загрузить ни одного трека из `{name}`"
+# removed = "🗑️ Убран из очереди: {title}"
+# more_tracks_queued = { one = "ℹ️ В очереди ещё {count} трек, загружаю по мере надобности", few = "ℹ️ В очереди ещё {count} трека, загружаю по мере надобности", many = "ℹ️ В очереди ещё {count} треков, загружаю по мере надобности" }
+# shuffled_upcoming_tracks = { one = "🔀 Перемешан {count} трек", few = "🔀 Перемешаны {count} трека", many = "🔀 Перемешано {count} треков" }
+# failed_count = "⚠️ Не загрузилось: {failures}"
+# loading_saved_queue = "📥 Загружаю `{name}`..."
+# spotify_error = "❌ Spotify: {exc}"
+# bot_ready = "🎵 Музыкальный бот на связи. Команды: `{prefix} help`"
+# search_pick_hint = "`{prefix} play <n>` или `{prefix} playnext <n>` в течение {minutes} мин"
+# playlist_loaded = { one = "✅ Плейлист `{name}`: {count} трек, загружаю по мере надобности", few = "✅ Плейлист `{name}`: {count} трека, загружаю по мере надобности", many = "✅ Плейлист `{name}`: {count} треков, загружаю по мере надобности" }
+# playlist_skipped_queued = "Пропущено, уже в очереди: {count}"
+# playlist_skipped_limit = "Пропущено сверх лимита {limit} за раз: {count}"
+# playlist_failed = "Не загрузилось: {count}"
+# queued = "✅ В очереди: {title}"
+# queued_next = "✅ Следующим: {title}"
+# queued_position = "Позиция: {position}"
+# starts_in = "Начнётся через: {eta}"
+# up_next = "Дальше: {title}"
+# queue_header = "🎵 Очередь"
+# looping = "🔁 (на повторе)"
+# now_prefix = "Сейчас:"
+# eta_in = "через {eta}"
+# queue_total = "Всего: {total}"
+# on = "вкл"
+# off = "выкл"
+# normalize_set = "✅ Выравнивание громкости: {state}"
+# history_header = "🕘 Недавно играло"
+# history_line = "{index}. {title} [{duration}] в {time}"
+# queue_saved = { one = "✅ Очередь `{name}` сохранена: {count} трек", few = "✅ Очередь `{name}` сохранена: {count} трека", many = "✅ Очередь `{name}` сохранена: {count} треков" }
+# queue_saved_skipped = { one = "Не сохранён {count} трек (его нельзя сохранить)", few = "Не сохранены {count} трека (их нельзя сохранить)", many = "Не сохранено {count} треков (их нельзя сохранить)" }
+# saved_queue_line = { one = "- {name} ({count} трек, {total})", few = "- {name} ({count} трека, {total})", many = "- {name} ({count} треков, {total})" }
+# saved_queues_header = "💾 Сохранённые очереди:"
+# active = "запущен"
+# inactive = "не запущен"
+# status_online = "✅ Бот работает"
+# status_worker = "Воркер звонка: {state}"
+# status_queue = { one = "Очередь: {count} трек", few = "Очередь: {count} трека", many = "Очередь: {count} треков" }
+# status_loop = "Повтор: {state}"
+# status_timer = "Таймер автоперехода: {state}"
+# status_preroll = "Тишина в начале: {seconds:.1f} с"
+# status_normalize = "Выравнивание громкости: {state}"
+# status_fade_in = "Нарастание: {fade_in_ms} мс"
+# status_volume = "Громкость: {volume}%"
+# status_language = "Язык: {language}"
+# status_room = "Комната: {room}"
+# status_current = "Сейчас: {title}"
+# nothing_playing = "ℹ️ Ничего не играет"
+# paused = "⏸️ Пауза. Продолжить: `{prefix} pause` или `{prefix} resume`"
+# not_paused = "ℹ️ Паузы нет"
+# resumed = "▶️ Продолжаю"
+# lang_current = """
+# 🌐 Язык здесь: {language}. Доступны: {available}
+# Сменить: `{prefix} lang <код>`, вернуть язык из конфига ({default}): `{prefix} lang default`."""
+# lang_set = "🌐 Язык: {language}"
+# lang_unknown = "❌ Неизвестный язык `{code}`. Доступны: {available}"
+# lang_reset = "🌐 Язык сброшен на язык по умолчанию: {language}"
+# audio_settings = """
+# 🎚️ Звук
+# Выравнивание громкости: {normalize}
+# Нарастание в начале: {fade_in_ms} мс
+# Громкость: {volume}%
+# Режим кэша: {cache_mode}
+# Размер кэша: до {cache_max}
+# Удалять после воспроизведения: {delete_after}
+# Удалять при выключении: {delete_on_shutdown}
+# Формат скачивания: {download_format}
+# Сразу играть поток, если тихо: {stream_first}
+# Докачивать текущий поток в файл: {stream_prefetch}"""
+# help = """
+# 🎵 Команды  (префикс: {prefix})
+#
+# Воспроизведение
+# {prefix} help (h) — эта справка
+# {prefix} lang [код] — язык бота в этой комнате
+# {prefix} join (j) — подключиться к звонку в этой комнате
+# {prefix} leave (lv) — выйти из звонка
+# {prefix} play (p) <ссылка или запрос> — добавить трек (бот сам зайдёт в звонок)
+# {prefix} playnext (pn) <ссылка или запрос> — добавить трек следующим
+# {prefix} search (sr) <запрос> — показать {results} результатов; потом {prefix} play <n> / {prefix} playnext <n>
+# {prefix} queue (q) — очередь и когда начнётся каждый трек
+# {prefix} remove (rm) <n> — убрать трек n из очереди
+# {prefix} nowplaying (np) — что играет сейчас
+# {prefix} skip (s) — следующий трек
+# {prefix} pause (ps) — пауза; ещё раз — продолжить
+# {prefix} resume (rs) — продолжить после паузы
+# {prefix} stop (x) — остановить и очистить очередь
+# {prefix} loop (lp) — повтор текущего трека вкл/выкл
+# {prefix} shuffle (sh, random) — перемешать следующие треки
+# {prefix} history (hist) — что играло недавно
+#
+# Сохранённые очереди
+# {prefix} save (sv) <имя> [--force] — сохранить текущий трек и очередь
+# {prefix} load (ld) <имя> — загрузить сохранённую очередь (бот сам зайдёт в звонок)
+# {prefix} queues (qs) — список сохранённых очередей
+# {prefix} deletequeue (dq) <имя> — удалить сохранённую очередь
+# {prefix} renamequeue (rq) <старое> <новое> — переименовать
+#
+# Звук и информация
+# {prefix} audio (a) — настройки звука
+# {prefix} normalize (norm) on|off — выравнивание громкости
+# {prefix} fadein (fi) <мс> — плавное нарастание в начале трека (0–5000)
+# {prefix} volume (v) <0-200> — громкость (логарифмическая: 50 ≈ вдвое тише)
+# {prefix} status (st) — состояние бота
+# {prefix} diag (d) — диагностика
+# {prefix} config (cfg) — действующие настройки
+# {prefix} defaults (df) — значения по умолчанию"""
