@@ -12,12 +12,21 @@ device's crypto store back after this script removed it.
 
     scripts/create_worker_device.py            # once
     scripts/create_worker_device.py --replace  # new device; logs the old one out
+
+Docker (writes into the data volume; stop the bot first, the check below
+can't see another container):
+
+    docker compose stop musicbot
+    docker compose run --rm musicbot python3 scripts/create_worker_device.py
 """
 import argparse, getpass, json, os, secrets, sys, tomllib, urllib.error, urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIG = ROOT / "config.toml"
+# Same config the bot reads: CONFIG_FILE (Docker: /app/config/config.toml), else config.toml.
+CONFIG = Path(os.environ.get("CONFIG_FILE") or "config.toml")
+if not CONFIG.is_absolute():
+    CONFIG = ROOT / CONFIG
 DATA = ROOT / "data"
 DEVICE_FILE = DATA / "worker_device.json"
 STORE_FILE = DATA / "worker_crypto_store.v8"
@@ -50,6 +59,8 @@ if running and not args.force:
     sys.exit(f"the bot seems to be running (pid {', '.join(map(str, running))}); stop it first "
              "(e.g. systemctl --user stop matrix-musicbot) or pass --force")
 
+if not CONFIG.is_file():
+    sys.exit(f"config not found: {CONFIG} (set CONFIG_FILE)")
 raw = tomllib.loads(CONFIG.read_text())
 cfg = raw.get("matrix", raw)
 hs, user_id = cfg["homeserver"].rstrip("/"), cfg["user_id"]

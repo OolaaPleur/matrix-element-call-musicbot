@@ -57,9 +57,17 @@ With `[worker] e2ee = true` the call worker encrypts the music like Element Call
    scripts/create_worker_device.py            # --replace for a new one
    ```
 
+   With Docker (the file goes into the `musicbot_data` volume):
+
+   ```bash
+   docker compose stop musicbot
+   docker compose run --rm musicbot python3 scripts/create_worker_device.py
+   docker compose up -d
+   ```
+
    Its Olm identity is kept in `data/worker_crypto_store.v8` (matrix-js-sdk rust crypto on [fake-indexeddb](https://github.com/dumbmatter/fakeIndexedDB), snapshotted to disk; no native modules). The worker cross-signs it with `data/cross_signing_keys.json` on start.
 
-2. **A fix in `@livekit/rtc-node`.** Released versions (1.2.x) can't take a key from the application ([livekit/node-sdks#768](https://github.com/livekit/node-sdks/pull/768)). Apply it after every `bun install`:
+2. **A fix in `@livekit/rtc-node`.** Released versions (1.2.x) can't take a key from the application ([livekit/node-sdks#768](https://github.com/livekit/node-sdks/pull/768)). The Docker image applies it at build time; on the host, apply it after every `bun install`:
 
    ```bash
    python3 call_worker/patches/apply-pr768.py
@@ -205,7 +213,8 @@ Long-term fix:
 
 ## Docker
 
-Build from the source of this repository to get all fork features.
+`docker compose up -d --build` builds the image from this checkout. CI also publishes it as `ghcr.io/oolaapleur/matrix-element-call-musicbot` (`latest`, version tag, commit SHA); to use that instead, remove `build: .` from `docker-compose.yml` and run `docker compose pull`. Bot data (crypto stores, saved queues, room languages) lives in the `musicbot_data` volume.
+The bot runs as uid 10001 in the container, so `config/config.toml` must be readable by it (e.g. `chmod 644`, or `chown 10001` with `chmod 600` since it holds the access token).
 
 ### Linux
 

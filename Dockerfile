@@ -17,9 +17,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 RUN python3 -m venv /opt/venv
 
+# requirements.txt installs matrix-bot-common editable from a sibling checkout
+# (host setup); the image takes it from GitHub instead.
+ARG COMMON_URL=https://github.com/OolaaPleur/matrix-element-call-common/archive/refs/heads/master.tar.gz
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /app/requirements.txt \
+    && grep -v '^-e ' /app/requirements.txt > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt "matrix-bot-common @ ${COMMON_URL}" \
     && pip install --no-cache-dir -U yt-dlp
 
 COPY --from=docker.io/oven/bun:1.4.3-debian /usr/local/bin/bun /usr/local/bin/bun

@@ -21,7 +21,9 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # requirements.txt has matrix-bot-common as a sibling editable checkout
+          grep -v '^-e ' requirements.txt > /tmp/requirements.txt
+          pip install -r /tmp/requirements.txt "matrix-bot-common @ https://github.com/OolaaPleur/matrix-element-call-common/archive/refs/heads/master.tar.gz"
 
       - name: Set up Node
         uses: actions/setup-node@v4
