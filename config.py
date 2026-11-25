@@ -18,7 +18,7 @@ class Config:
         "bot.history_limit": 10,
         "bot.auto_accept_invites": False,
         "bot.scrobbler_events": False,
-        "paths.audio_dir": "/tmp/musicbot_audio",
+        "paths.audio_dir": "cache/audio",
         "paths.saved_queues_file": "data/saved_queues.json",
         "audio.auto_advance_buffer": 2.0,
         "audio.preroll_silence": 0.0,

@@ -35,8 +35,8 @@ RUN bun install --cwd /app/call_worker --frozen-lockfile --production \
 COPY . /app
 
 RUN useradd -m -u 10001 musicbot \
-    && mkdir -p /app/logs /app/data /tmp/musicbot_audio \
-    && chown -R musicbot:musicbot /app /tmp/musicbot_audio
+    && mkdir -p /app/logs /app/data /app/cache \
+    && chown -R musicbot:musicbot /app
 
 USER musicbot
 

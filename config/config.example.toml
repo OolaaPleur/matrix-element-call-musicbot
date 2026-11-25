@@ -25,7 +25,9 @@ auto_accept_invites = false
 scrobbler_events = false
 
 [paths]
-audio_dir = "/tmp/musicbot_audio"
+# Downloaded tracks. Relative paths are relative to the bot directory
+# (avoid /tmp: on many systems it is in RAM and emptied on reboot).
+audio_dir = "cache/audio"
 saved_queues_file = "data/saved_queues.json"
 
 [audio]

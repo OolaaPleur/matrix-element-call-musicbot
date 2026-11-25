@@ -13,7 +13,7 @@ services:
       - ./config:/app/config:ro
       - musicbot_logs:/app/logs
       - musicbot_data:/app/data
-      - musicbot_cache:/tmp/musicbot_audio
+      - musicbot_cache:/app/cache
 
 volumes:
   musicbot_logs:

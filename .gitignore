@@ -4,6 +4,7 @@ config/*
 !config/.gitkeep
 !config/config.example.toml
 logs/
+cache/
 data/
 __pycache__/
 *.pyc

@@ -265,6 +265,8 @@ Everything the bot keeps lives in `data/` (the `musicbot_data` volume with Docke
 | `worker_device.json`, `worker_crypto_store.v8` | The call worker's device and its E2EE keys | No call audio E2EE until `create_worker_device.py --replace` |
 | `saved_queues.json`, `room_languages.json` | Saved queues, per-room languages | Gone, nothing else breaks |
 
+Downloaded tracks go to `cache/audio` (`paths.audio_dir`; the `musicbot_cache` volume with Docker). They are kept across restarts and re-downloadable, so leave them out of backups.
+
 Back up while the bot is stopped: `crypto_store/` is an SQLite database, a copy taken mid-write may not open. Restoring one device's crypto store into a second running copy of the bot breaks E2EE for both: never run two copies with the same access token.
 
 ### Rotating the access token
