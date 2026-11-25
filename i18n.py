@@ -2,9 +2,10 @@
 
 Every message has a key; its text per language lives in TOML files:
 
-    locales/<lang>.toml        shipped with the bot (en is complete)
-    data/locales/<lang>.toml   your own: a new language, or overrides of some
-                               keys of a shipped one
+    locales/<lang>.toml          shipped with the bot (en is complete)
+    locales/custom/<lang>.toml   your own: a new language, or overrides of some
+                                 keys of a shipped one (en/ru ship with every
+                                 key commented out, ready to edit)
 
 A text is a string with {named} placeholders (str.format syntax, so
 "{seconds:.1f}" works), or a table of plural forms chosen by the `count`

@@ -6,7 +6,7 @@
 # {placeholders} (you may drop some, not add new ones); a leading ❌/⚠️ marks
 # the message as urgent. Takes effect after a restart.
 #
-# A new language: data/locales/<code>.toml with its own language_name and the
+# A new language: locales/custom/<code>.toml with its own language_name and the
 # keys of locales/en.toml; "!m lang" will list it.
 
 # track_already_playing_queued = "ℹ️ That track is already playing or queued. Use `{prefix} loop` if you want repeats."

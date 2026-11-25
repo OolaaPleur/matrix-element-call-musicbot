@@ -201,7 +201,7 @@ class IntegratedBot:
         )
         self.call_worker.set_event_handler(self._on_call_worker_event)
         self.saved_queues = SavedQueueStore(config.SAVED_QUEUES_FILE)
-        self.translations = Translations(Path(__file__).resolve().parent / "locales", _DATA_DIR / "locales")
+        self.translations = Translations(Path(__file__).resolve().parent / "locales", Path(__file__).resolve().parent / "locales" / "custom")
         if config.BOT_LANGUAGE not in self.translations.catalogs:
             logger.warning("bot.language=%r has no locale file, using English", config.BOT_LANGUAGE)
         self._room_languages_file = _DATA_DIR / "room_languages.json"

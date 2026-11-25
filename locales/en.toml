@@ -1,5 +1,5 @@
 # English messages of the bot: the complete reference catalog.
-# To translate: copy this file to data/locales/<code>.toml (your own) or
+# To translate: copy this file to locales/custom/<code>.toml (your own) or
 # locales/<code>.toml (shipped), set language_name and change the texts.
 # Keep every {placeholder}; leave out keys you don't translate (English is
 # used for them). Plural forms: { one = "...", other = "..." } (Russian:
