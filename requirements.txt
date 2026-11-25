@@ -1,2 +1,2 @@
 matrix-nio[e2e]==0.26.0
-../matrix-element-call-common
+-e ../matrix-element-call-common
