@@ -49,6 +49,7 @@ _NOISE_RE = re.compile(
 _TOPIC_SUFFIX_RE = re.compile(r"\s*-\s*Topic\s*$", re.IGNORECASE)
 # Per-device call membership: _@localpart:server_deviceId_m.call
 _PER_DEVICE_CALL_STATE_KEY_RE = re.compile(r"^_(@[^:]+:[^_]+)_")
+_DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 def _clean_title(title: str) -> str:
