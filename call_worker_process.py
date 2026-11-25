@@ -233,6 +233,9 @@ class CallWorkerProcess:
         return await asyncio.wait_for(_next(), timeout=timeout)
 
     async def _spawn_locked(self, room_id: str):
+        # Events of the previous process (e.g. a non-fatal "error" nobody consumed)
+        # would otherwise fail the wait for the new one's "joined".
+        self._drain_events()
         env = os.environ.copy()
         env["MATRIX_ROOM_ID"] = room_id
         env.update(self._env_overrides)
@@ -467,8 +470,9 @@ class CallWorkerProcess:
             if self.running:
                 self._state = "joined"
             self._consecutive_stop_timeouts = 0
-        elif event_name == "error":
-            self._state = "error"
+        # "error" doesn't change the state: most are non-fatal (membership manager,
+        # a bad command) and the worker keeps playing; a fatal one ends the process,
+        # which _monitor_process handles.
         elif event_name == "left":
             self._state = "idle"
 

@@ -348,6 +348,12 @@ class AudioQueue:
         if host == "youtu.be" and parsed.path.strip("/"):
             video_id = parsed.path.strip("/").split("/")[0]
             pairs = [("v", video_id), *parse_qsl(parsed.query, keep_blank_values=True)]
+        elif host in youtube_hosts and path_parts[:2] == ["embed", "videoseries"]:
+            # An embedded playlist, not a video called "videoseries".
+            playlist = dict(parse_qsl(parsed.query)).get("list")
+            if not playlist:
+                return raw
+            return urlunparse(("https", "www.youtube.com", "/playlist", "", urlencode({"list": playlist}), ""))
         elif host in youtube_hosts and len(path_parts) == 2 and path_parts[0] in {"shorts", "live", "embed"}:
             pairs = [("v", path_parts[1]), *parse_qsl(parsed.query, keep_blank_values=True)]
         elif host in youtube_hosts and parsed.path == "/watch":
@@ -387,8 +393,21 @@ class AudioQueue:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        stdout, stderr = await AudioQueue._communicate(process)
         return (process.returncode if process.returncode is not None else -1), stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+
+    @staticmethod
+    async def _communicate(process: asyncio.subprocess.Process) -> tuple[bytes, bytes]:
+        """communicate(), but a cancelled caller kills the process: an orphaned
+        yt-dlp would keep writing a temp file that the next download of the same
+        track also writes."""
+        try:
+            return await process.communicate()
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
 
     async def _resolve_media_info(self, dlp_cmd: str, query_or_url: str) -> tuple[bool, dict | str]:
         is_url = self.looks_like_url(query_or_url)
@@ -433,6 +452,10 @@ class AudioQueue:
             return False, "Could not parse media metadata"
         entry = data
         entries = data.get("entries")
+        if isinstance(entries, list) and not entries:
+            # A search with no hits (or an empty playlist): its own webpage_url is
+            # the search page, which would end in "File not found after download".
+            return False, "No results found"
         if isinstance(entries, list) and entries:
             for item in entries:
                 if isinstance(item, dict) and item.get("webpage_url"):
@@ -587,18 +610,35 @@ class AudioQueue:
             seen.add(normalized)
             urls.append(normalized)
 
+        # A link to a video inside a playlist (watch?v=X&list=…) starts at X, as on
+        # YouTube; the tracks before it are not queued.
+        video_id = dict(parse_qsl(urlparse(candidate).query)).get("v")
+        if video_id:
+            start = f"https://www.youtube.com/watch?v={video_id}"
+            if start in urls:
+                urls = urls[urls.index(start):]
+            else:
+                urls.insert(0, start)
+
         title_value = data.get("title")
         title = self.normalize_title(str(title_value)) if isinstance(title_value, str) else None
         return True, {"is_playlist": True, "title": title, "entries": urls}
 
     async def download_audio(self, query_or_url: str) -> tuple[bool, dict | str]:
         """Download audio, serialized per query/URL (a second caller gets the cached file)."""
-        key = self.normalize_media_url(query_or_url.strip()).casefold()
+        key = self._download_lock_key(query_or_url)
+        async with self._download_lock(key):
+            return await self._download_audio_unlocked(query_or_url, lock_key=key)
+
+    def _download_lock_key(self, query_or_url: str) -> str:
+        normalized = self.normalize_media_url(query_or_url.strip())
+        # URLs as they are (YouTube ids are case-sensitive), queries case-insensitive.
+        return normalized if self.looks_like_url(normalized) else normalized.casefold()
+
+    def _download_lock(self, key: str) -> asyncio.Lock:
         # Locks are never removed (a few bytes per distinct query): dropping one while
         # a waiter is about to take it would let a third caller run in parallel.
-        lock = self._download_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            return await self._download_audio_unlocked(query_or_url)
+        return self._download_locks.setdefault(key, asyncio.Lock())
 
     def _cache_path(self, source_url: str) -> Path:
         url_hash = hashlib.md5(source_url.encode(), usedforsecurity=False).hexdigest()[:8]
@@ -657,7 +697,7 @@ class AudioQueue:
                 return self._result(final_output, music_duration, resolved, False)
         return None
 
-    async def _download_audio_unlocked(self, query_or_url: str) -> tuple[bool, dict | str]:
+    async def _download_audio_unlocked(self, query_or_url: str, lock_key: str = "") -> tuple[bool, dict | str]:
         """Download audio from URL/search with caching and pre-roll silence.
 
         Returns (success, result dict from _result() or an error message).
@@ -697,11 +737,20 @@ class AudioQueue:
         if resolved is not None:
             if self.search_mode == "fast" and not is_direct_url:
                 self.search_cache[query_key] = dict(resolved)
-            hit = await self._cached_result(resolved)
-            if hit:
-                return True, hit
-            return await self._fetch_audio(dlp_cmd, resolved["source_url"], resolved)
+            source_key = self._download_lock_key(resolved["source_url"])
+            if source_key == lock_key:
+                return await self._fetch_resolved(dlp_cmd, resolved)
+            # A search query (or another spelling) of a track someone may be
+            # downloading by its URL right now: same file, same temp name.
+            async with self._download_lock(source_key):
+                return await self._fetch_resolved(dlp_cmd, resolved)
         return await self._fetch_audio(dlp_cmd, query_or_url, None)
+
+    async def _fetch_resolved(self, dlp_cmd: str, resolved: dict) -> tuple[bool, dict | str]:
+        hit = await self._cached_result(resolved)
+        if hit:
+            return True, hit
+        return await self._fetch_audio(dlp_cmd, resolved["source_url"], resolved)
 
     async def _fetch_audio(self, dlp_cmd: str, url: str, resolved: Optional[dict]) -> tuple[bool, dict | str]:
         """Run the yt-dlp download; with resolved=None it also prints the metadata (-j)."""
@@ -742,7 +791,7 @@ class AudioQueue:
 
         try:
             process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            stdout, stderr = await process.communicate()
+            stdout, stderr = await self._communicate(process)
 
             if process.returncode != 0:
                 error_msg = stderr.decode(errors="replace").strip() if stderr else "Unknown error"
@@ -846,6 +895,14 @@ class AudioQueue:
         except Exception as exc:
             logger.error(f"Download exception: {exc}")
             return False, str(exc)
+        finally:
+            # Failed, cancelled or done: nothing of this run's temp files is needed
+            # (the cache LRU never looks at *_temp.* files, so they would stay forever).
+            for leftover in self.audio_dir.glob(f"{url_hash}_temp.*"):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
 
     def add_to_queue(
         self,

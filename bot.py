@@ -329,6 +329,7 @@ class IntegratedBot:
         duration_s = int(track.get("duration") or 0)
         self._active_play = {
             "play_id": play_id,
+            "room_id": room_id,
             "started_at": started_at,
             "started_participants": set(participants),
             "duration_s": duration_s,
@@ -485,14 +486,20 @@ class IntegratedBot:
                 if not self._is_joined_in_room_call(room_id):
                     continue
 
-                logger.warning(
-                    "Advance watchdog forcing next track after %.2fs (threshold %.2fs)",
-                    elapsed,
-                    threshold,
-                )
+                generation = self._playback_generation
                 async with self._playback_lock:
-                    if self.audio_queue.current and self.audio_queue.queue:
-                        await self._advance_queue(room_id, force_next=True)
+                    # A skip or the timer may have started another track while we
+                    # waited for the lock: that one hasn't overrun.
+                    if generation != self._playback_generation:
+                        continue
+                    if not (self.audio_queue.current and self.audio_queue.queue):
+                        continue
+                    logger.warning(
+                        "Advance watchdog forcing next track after %.2fs (threshold %.2fs)",
+                        elapsed,
+                        threshold,
+                    )
+                    await self._advance_queue(room_id, force_next=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -718,7 +725,16 @@ class IntegratedBot:
                 return
             current["file"] = result.get("file")
             current["non_cacheable"] = bool(result.get("non_cacheable"))
-            replay_needed = self.audio_queue.loop_mode and self.call_worker.state != "playing"
+            # Only if this track's playback really is over (its watcher is gone). The
+            # worker state alone says "joined" for ~1 s after a stream play starts,
+            # and a cached file arrives faster than that: it would replay the track
+            # with a bogus "finished" and a second play_id.
+            watcher = self._worker_playback_task
+            replay_needed = (
+                self.audio_queue.loop_mode
+                and (watcher is None or watcher.done())
+                and self.call_worker.state != "playing"
+            )
             if replay_needed:
                 try:
                     await self._advance_queue(room_id, force_next=False, pre_stop=False)
@@ -871,6 +887,27 @@ class IntegratedBot:
             self._auto_advance_timer(float(duration), room_id, generation, expected_source)
         )
 
+    def _schedule_resync(self, room_id: str):
+        """Replay the current track on a new worker process, under the playback lock.
+
+        The restart/recovery event can arrive in the middle of a track change (a
+        stop timeout inside _advance_queue recovers the worker): replaying right
+        away would start the track twice. If a track was started after the event,
+        the new worker is already playing it.
+        """
+        generation = self._playback_generation
+
+        async def resync():
+            async with self._playback_lock:
+                if generation != self._playback_generation:
+                    logger.info("Skipping resync: a track was started after the worker came back")
+                    return
+                await self._sync_current_track_to_worker(room_id, announce=False)
+
+        task = asyncio.create_task(resync())
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
+
     async def _sync_current_track_to_worker(self, room_id: str, announce: bool = True) -> bool:
         if not self.audio_queue.current:
             return False
@@ -881,12 +918,13 @@ class IntegratedBot:
 
         try:
             self._cancel_worker_playback_wait()
+            # The track restarts from the beginning: close the interrupted play (it
+            # isn't a finished listen) and start a new one for the scrobbler. Before
+            # replaying, which clears the pause state the played time depends on.
+            await self._emit_track_finished(room_id, "stopped")
             await self.call_worker.stop_playback(wait_for_terminal=False)
             generation, source_ref = await self._play_track_in_worker(self.audio_queue.current, pre_stop=False)
             self._current_track_started_at = asyncio.get_running_loop().time()
-            # The track restarts from the beginning: close the interrupted play (it
-            # isn't a finished listen) and start a new one for the scrobbler.
-            await self._emit_track_finished(room_id, "stopped")
             self._start_play_tracking(room_id, self.audio_queue.current)
             self._worker_playback_task = asyncio.create_task(
                 self._wait_for_worker_playback(room_id, generation, source_ref)
@@ -943,8 +981,9 @@ class IntegratedBot:
         await self.send_message(room_id, "✅ Joined Element Call")
         await self._apply_audio_settings_to_worker()
 
-        if self.audio_queue.current and self._current_room_id == room_id:
-            await self._sync_current_track_to_worker(room_id, announce=True)
+        async with self._playback_lock:
+            if self.audio_queue.current and self._current_room_id == room_id:
+                await self._sync_current_track_to_worker(room_id, announce=True)
 
         return True
 
@@ -980,7 +1019,9 @@ class IntegratedBot:
             logger.info("Cancelled background queue loader")
         self._background_load_task = None
         self._pending_sources = None
-        self._cancel_stream_prefetch()
+        # The current track's file prefetch is left alone: play/load only add to
+        # the queue, and without the file a loop replay or a failed stream would
+        # need a new download. stop/leave/shutdown cancel it themselves.
 
     def _is_retryable_stream_failure(self, track) -> bool:
         """True if `track` was playing from a stream URL and can still fall back to a file."""
@@ -1116,7 +1157,7 @@ class IntegratedBot:
         if event_name != "play_ended":
             return
 
-        await self._emit_track_finished(room_id, "finished", event.get("played_s"))
+        await self._emit_track_finished(room_id, "finished")
 
         async with self._playback_lock:
             await self._advance_queue(room_id, force_next=not self.audio_queue.loop_mode)
@@ -1230,7 +1271,7 @@ class IntegratedBot:
         if event_name == "worker_restarted":
             self._restart_failed_notified = False
             await self.send_message(room_id, "✅ Call worker reconnected", priority="critical")
-            await self._sync_current_track_to_worker(room_id, announce=False)
+            self._schedule_resync(room_id)
             return
 
         if event_name == "worker_restart_failed":
@@ -1255,7 +1296,7 @@ class IntegratedBot:
 
         if event_name == "worker_recovered":
             await self.send_message(room_id, "✅ Call worker recovered", priority="critical")
-            await self._sync_current_track_to_worker(room_id, announce=False)
+            self._schedule_resync(room_id)
             return
 
     async def _auto_advance_timer(
@@ -1634,16 +1675,21 @@ class IntegratedBot:
                 await self.send_message(room.room_id, "ℹ️ Not currently in a call")
                 return
 
-            _call_room = self.call_worker.room_id or room.room_id
-            await self._emit_track_finished(_call_room, "stopped")
-
             # The auto-advance timer would otherwise fire after the track's end,
             # pop the next track and post "not joined in this room call".
             self._cancel_auto_advance()
             self._cancel_worker_playback_wait()
             self._cancel_background_load()
-            self._current_track_started_at = None
-            await self.call_worker.stop()
+            self._cancel_stream_prefetch()
+            # Under the lock: a track change in progress would otherwise start the
+            # next track after we left (or in the new worker).
+            async with self._playback_lock:
+                self._cancel_auto_advance()
+                self._cancel_worker_playback_wait()
+                _call_room = self.call_worker.room_id or room.room_id
+                await self._emit_track_finished(_call_room, "stopped")
+                self._current_track_started_at = None
+                await self.call_worker.stop()
             await self.send_message(room.room_id, "✅ Left Element Call")
             return
 
@@ -1682,7 +1728,10 @@ class IntegratedBot:
                             "title": spotify_item.name,
                             "entries": [t.query for t in spotify_item.tracks],
                         }
-                elif self.audio_queue.looks_like_url(args):
+                elif self.audio_queue.looks_like_url(args) and not self.audio_queue.is_single_video_url(
+                    self.audio_queue.normalize_media_url(args)
+                ):
+                    # A plain video link can't be a playlist: skip the yt-dlp probe.
                     resolved_ok, resolved = await self.audio_queue.resolve_playlist_entries(args)
                     if resolved_ok and isinstance(resolved, dict) and resolved.get("is_playlist"):
                         playlist_ok = True
@@ -2346,25 +2395,30 @@ class IntegratedBot:
             if not await self._require_joined_in_room_call(room.room_id, f"{self._prefix} stop"):
                 return
 
-            _call_room = self.call_worker.room_id or room.room_id
-            await self._emit_track_finished(_call_room, "stopped")
-
             self._cancel_auto_advance()
             self._cancel_worker_playback_wait()
             self._cancel_background_load()
-            tracks_to_cleanup = []
-            if self.audio_queue.current:
-                tracks_to_cleanup.append(self.audio_queue.current)
-            tracks_to_cleanup.extend(list(self.audio_queue.queue))
-            self.audio_queue.clear_queue()
-            self.audio_queue.current = None
-            self._current_room_id = None
-            self._current_track_started_at = None
-            self._paused_at = None
-            self._paused_wall = None
-            for track in tracks_to_cleanup:
-                self.audio_queue.maybe_delete_track_file(track, trigger="after_playback")
-            await self.call_worker.stop_playback(wait_for_terminal=True)
+            self._cancel_stream_prefetch()
+            # Under the lock: otherwise a track change in progress (pre-stop wait,
+            # file fallback download) plays the next track after "Stopped".
+            async with self._playback_lock:
+                self._cancel_auto_advance()
+                self._cancel_worker_playback_wait()
+                _call_room = self.call_worker.room_id or room.room_id
+                await self._emit_track_finished(_call_room, "stopped")
+                tracks_to_cleanup = []
+                if self.audio_queue.current:
+                    tracks_to_cleanup.append(self.audio_queue.current)
+                tracks_to_cleanup.extend(list(self.audio_queue.queue))
+                self.audio_queue.clear_queue()
+                self.audio_queue.current = None
+                self._current_room_id = None
+                self._current_track_started_at = None
+                self._paused_at = None
+                self._paused_wall = None
+                for track in tracks_to_cleanup:
+                    self.audio_queue.maybe_delete_track_file(track, trigger="after_playback")
+                await self.call_worker.stop_playback(wait_for_terminal=True)
             await self.send_message(room.room_id, "⏹️ Stopped and cleared queue")
             return
 
@@ -2478,17 +2532,22 @@ class IntegratedBot:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 300)
         finally:
+            # Nothing may start a track while we shut down.
+            self._cancel_auto_advance()
+            self._cancel_advance_watchdog()
+            self._cancel_worker_playback_wait()
+            self._cancel_background_load()
+            self._cancel_stream_prefetch()
+            if self._active_play is not None:
+                # The track playing now ends here: close it for the scrobbler.
+                await self._emit_track_finished(self._active_play["room_id"], "stopped")
             if self._emit_task:
-                # Send what's still queued (e.g. the track_finished of a stop just now).
+                # Send what's still queued (e.g. the track_finished just above).
                 try:
                     await asyncio.wait_for(self._emit_queue.join(), timeout=10)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     logger.warning("Shutdown: %d scrobbler event(s) not sent", self._emit_queue.qsize())
                 self._emit_task.cancel()
-            self._cancel_auto_advance()
-            self._cancel_advance_watchdog()
-            self._cancel_worker_playback_wait()
-            self._cancel_background_load()
             self.audio_queue.cleanup_on_shutdown()
             await self._stop_message_dispatcher()
             await self.call_worker.stop()
