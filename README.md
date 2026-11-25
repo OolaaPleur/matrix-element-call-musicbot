@@ -361,31 +361,9 @@ systemctl --user enable --now matrix-musicbot
 loginctl enable-linger "$USER"   # keep it running while you're logged out
 ```
 
-### Windows (PowerShell)
+### Windows
 
-> [!WARNING]
-> Not tested on Windows. The commands below should work, but nobody has run them yet; reports welcome.
-
-```powershell
-# Clone this repo and the shared library as siblings
-git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
-git clone https://github.com/OolaaPleur/matrix-element-call-common
-Set-Location .\matrix-element-call-musicbot
-
-py -3 -m venv venv
-.\venv\Scripts\Activate.ps1
-
-pip install -r requirements.txt
-bun install --cwd call_worker --frozen-lockfile
-python call_worker/patches/apply-pr768.py    # rtc-node fix for call audio E2EE, see "Call audio E2EE"
-
-Copy-Item .\config\config.example.toml .\config.toml
-# Edit .\config.toml
-
-python .\main.py
-```
-
-Requires: Python 3.11+, Node.js 22+, Bun (installs the call worker's dependencies), ffmpeg, yt-dlp (all in PATH).
+Not supported without Docker; use Docker Desktop (see [Docker](#docker)).
 
 ## Basic Verification
 
