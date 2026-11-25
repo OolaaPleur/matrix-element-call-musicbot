@@ -43,9 +43,9 @@ class Config:
         "worker.skip_cooldown_seconds": 1.0,
         "worker.stop_timeout_restart_threshold": 2,
         "worker.membership_mode": "legacy",
-        "worker.stereo": False,
-        "worker.audio_bitrate_kbps": 0,
-        "worker.e2ee": False,
+        "worker.stereo": True,
+        "worker.audio_bitrate_kbps": 128,
+        "worker.e2ee": "auto",
         "worker.log_max_bytes": 2_000_000,
         "worker.log_backups": 5,
         "playlist.max_tracks_per_request": 50,
@@ -271,7 +271,23 @@ class Config:
         self.WORKER_AUDIO_BITRATE_KBPS = self._get_nonnegative_int(
             "WORKER_AUDIO_BITRATE_KBPS", "worker", "audio_bitrate_kbps", self.DEFAULTS["worker.audio_bitrate_kbps"]
         )
-        self.WORKER_E2EE = self._get_bool("WORKER_E2EE", "worker", "e2ee", self.DEFAULTS["worker.e2ee"])
+        # auto: on when the worker device exists (scripts/create_worker_device.py),
+        # silently off otherwise; true: on, and say in the room when it can't be;
+        # false: off even with a worker device. The bot resolves auto at start.
+        raw_e2ee = os.environ.get("WORKER_E2EE")
+        if raw_e2ee is None:
+            raw_e2ee = self._toml_get("worker", "e2ee")
+        if raw_e2ee is None:
+            raw_e2ee = self.DEFAULTS["worker.e2ee"]
+        e2ee_norm = str(raw_e2ee).strip().lower()
+        if e2ee_norm == "auto":
+            self.WORKER_E2EE_MODE = "auto"
+        elif e2ee_norm in {"1", "true", "yes", "on"}:
+            self.WORKER_E2EE_MODE = "true"
+        elif e2ee_norm in {"0", "false", "no", "off"}:
+            self.WORKER_E2EE_MODE = "false"
+        else:
+            raise ValueError(f"WORKER_E2EE/worker.e2ee must be auto, true or false, got: {raw_e2ee!r}")
         # track_started/track_finished room events for the companion scrobbler bot.
         # Off by default: two extra sends per track count against the homeserver's
         # rate limit, which delays command replies after a few quick skips.
@@ -469,9 +485,9 @@ class Config:
             f"worker.skip_cooldown_seconds = {cls.DEFAULTS['worker.skip_cooldown_seconds']}",
             f"worker.stop_timeout_restart_threshold = {cls.DEFAULTS['worker.stop_timeout_restart_threshold']}",
             "worker.membership_mode = matrix2_auto | matrix2 | legacy",
-            "worker.stereo = true | false (two-channel audio in the call)",
-            "worker.audio_bitrate_kbps = 0 (LiveKit default) or e.g. 128",
-            f"worker.e2ee = {str(cls.DEFAULTS['worker.e2ee']).lower()}",
+            f"worker.stereo = {str(cls.DEFAULTS['worker.stereo']).lower()} (false = mono)",
+            f"worker.audio_bitrate_kbps = {cls.DEFAULTS['worker.audio_bitrate_kbps']} (0 = LiveKit default)",
+            f"worker.e2ee = {cls.DEFAULTS['worker.e2ee']} | true | false",
             f"worker.log_max_bytes = {cls.DEFAULTS['worker.log_max_bytes']}",
             f"worker.log_backups = {cls.DEFAULTS['worker.log_backups']}",
             f"playlist.max_tracks_per_request = {cls.DEFAULTS['playlist.max_tracks_per_request']}",

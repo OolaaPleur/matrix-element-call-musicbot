@@ -198,6 +198,17 @@ class IntegratedBot:
         self._command_tasks: set[asyncio.Task] = set()
         # room_id -> (monotonic time, result URLs) of the last `search`, for `play <n>`.
         self._search_results: dict[str, tuple[float, list[str]]] = {}
+        worker_device_file = _DATA_DIR / "worker_device.json"
+        self._worker_e2ee = config.WORKER_E2EE_MODE == "true" or (
+            config.WORKER_E2EE_MODE == "auto" and worker_device_file.is_file()
+        )
+        logger.info(
+            "Call audio E2EE: %s (worker.e2ee = %s%s)",
+            "on" if self._worker_e2ee else "off",
+            config.WORKER_E2EE_MODE,
+            "" if config.WORKER_E2EE_MODE != "auto" else
+            (", worker device found" if self._worker_e2ee else ", no worker device"),
+        )
         self.call_worker = CallWorkerProcess(
             Path(__file__).resolve().parent,
             max_restart_attempts=config.WORKER_MAX_RESTART_ATTEMPTS,
@@ -215,13 +226,13 @@ class IntegratedBot:
                 "WORKER_MEMBERSHIP_MODE": config.WORKER_MEMBERSHIP_MODE,
                 "WORKER_AUDIO_CHANNELS": "2" if config.WORKER_STEREO else "1",
                 "WORKER_AUDIO_BITRATE_KBPS": str(config.WORKER_AUDIO_BITRATE_KBPS),
-                "WORKER_E2EE": "true" if config.WORKER_E2EE else "false",
+                "WORKER_E2EE": "true" if self._worker_e2ee else "false",
                 "WORKER_DEVICE_FILE": str(_DATA_DIR / "worker_device.json"),
                 "WORKER_CRYPTO_STORE_FILE": str(_DATA_DIR / "worker_crypto_store.v8"),
                 "WORKER_CROSS_SIGNING_KEYS_FILE": str(_DATA_DIR / "cross_signing_keys.json"),
             },
         )
-        if config.WORKER_E2EE:
+        if self._worker_e2ee:
             self.call_worker.join_timeout = 120.0
         self.call_worker.set_event_handler(self._on_call_worker_event)
         self.saved_queues = SavedQueueStore(config.SAVED_QUEUES_FILE)
@@ -676,6 +687,7 @@ class IntegratedBot:
             f"Worker membership mode: {self.config.WORKER_MEMBERSHIP_MODE}",
             f"Call audio: {'stereo' if self.config.WORKER_STEREO else 'mono'}, "
             f"{f'{self.config.WORKER_AUDIO_BITRATE_KBPS} kbps' if self.config.WORKER_AUDIO_BITRATE_KBPS else 'default bitrate'}",
+            f"Call audio E2EE: {'On' if self._worker_e2ee else 'Off'} ({self.config.WORKER_E2EE_MODE})",
             f"Playlist max tracks/request: {self.config.PLAYLIST_MAX_TRACKS_PER_REQUEST}",
             f"Playlist background concurrency: {self.config.PLAYLIST_BACKGROUND_LOAD_CONCURRENCY}",
             f"History limit: {self.config.HISTORY_LIMIT}",

@@ -49,9 +49,9 @@ Every setting is listed with its default in [`config/config.example.toml`](confi
 | `audio.proxy` | `""` | Proxy for yt-dlp |
 | `audio.search_mode` | `"fast"` | `fast`: short network timeouts and search results cached in memory (the same query plays the same track without asking YouTube again); `accurate`: always asks again, no short timeouts |
 | `audio.stream_first_idle` | `true` | When nothing is playing, start streaming the track right away instead of downloading it first; the file is fetched in the background (`stream_prefetch_current`) and used if the stream fails (`stream_retry_to_file_on_fail`) |
-| `worker.stereo` | `false` | Two-channel audio in the call (music rather than voice) |
-| `worker.audio_bitrate_kbps` | `0` | Opus bitrate, e.g. `128`; `0` = LiveKit's default |
-| `worker.e2ee` | `false` | [Call audio E2EE](#call-audio-e2ee-optional) |
+| `worker.stereo` | `true` | Two-channel audio in the call; `false` = mono, like a voice call |
+| `worker.audio_bitrate_kbps` | `128` | Opus bitrate of the music; `0` = LiveKit's default (voice-oriented, lower) |
+| `worker.e2ee` | `"auto"` | [Call audio E2EE](#call-audio-e2ee-optional): `auto` = on once the worker device exists, `true` = on and complain in the room if it can't be, `false` = off |
 | `ui.quiet_mode` | `true` | Drop progress chatter ("Searching…", "Downloading…", "Skipping…"); answers and errors are always sent |
 
 ## E2EE
@@ -62,7 +62,7 @@ The bot does not subscribe to other participants' tracks (`autoSubscribe: false`
 
 ### Call audio E2EE (optional)
 
-With `[worker] e2ee = true` the call worker encrypts the music like Element Call does (LiveKit SFrame, per-participant keys exchanged over Olm). It needs:
+The call worker can encrypt the music like Element Call does (LiveKit SFrame, per-participant keys exchanged over Olm). With the default `[worker] e2ee = "auto"` this switches on by itself once the worker device below exists, and stays silently off before that; `true` insists on it (and says so in the room when it can't), `false` turns it off. It needs:
 
 1. **A device of its own.** The keys travel as Olm-encrypted to-device messages, and the bot's own device belongs to matrix-nio, so the worker logs in as a second device of the same account. Create it once (asks for the bot's password, writes `data/worker_device.json`, mode 600):
 
@@ -91,7 +91,7 @@ With `[worker] e2ee = true` the call worker encrypts the music like Element Call
 
 The worker also moves its own frame cryptors to each new key index by hand (`FrameCryptor.setKeyIndex`), working around [livekit/rust-sdks#1676](https://github.com/livekit/rust-sdks/issues/1676) until a release ships [#1677](https://github.com/livekit/rust-sdks/pull/1677). `WORKER_E2EE_SET_KEY_INDEX=false` turns that off.
 
-If the device file or the rtc-node fix is missing, the device's token is rejected, or the crypto store can't be read, the worker logs why (`e2ee OFF, playing unencrypted: …`), says so in the room, and plays unencrypted (an unreadable store needs `create_worker_device.py --replace`). A homeserver that is merely unreachable doesn't switch E2EE off: the worker start fails and is retried.
+If E2EE is on (`true`, or `auto` with a worker device) but the rtc-node fix is missing, the device's token is rejected, or the crypto store can't be read, the worker logs why (`e2ee OFF, playing unencrypted: …`), says so in the room, and plays unencrypted (an unreadable store needs `create_worker_device.py --replace`). A homeserver that is merely unreachable doesn't switch E2EE off: the worker start fails and is retried.
 
 ## Current Limitations
 
@@ -182,7 +182,7 @@ Usually the homeserver's rate limit (`429` in the log): every message and event 
 
 ### "e2ee OFF, playing unencrypted"
 
-The worker log says why, the room gets a one-line notice:
+The worker log says why, the room gets a one-line notice (with `e2ee = "auto"` a missing worker device just means E2EE stays off, without a notice):
 
 | Reason | Fix |
 |---|---|

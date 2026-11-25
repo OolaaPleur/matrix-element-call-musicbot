@@ -60,10 +60,15 @@ heartbeat_interval_seconds = 10.0
 skip_cooldown_seconds = 1.0
 stop_timeout_restart_threshold = 2
 membership_mode = "legacy" # legacy | matrix2_auto | matrix2
+stereo = true # false = mono (voice-style)
+audio_bitrate_kbps = 128 # Opus max bitrate; 0 = LiveKit's default
 # Encrypt call audio (LiveKit media E2EE, as Element Call does). Needs the worker
 # device (scripts/create_worker_device.py) and the rtc-node patch
-# (call_worker/patches/apply-pr768.py); without them the worker plays unencrypted.
-e2ee = false
+# (call_worker/patches/apply-pr768.py).
+#   auto:  on once the worker device exists, silently off before that
+#   true:  on; if it can't be, the bot says so in the room and plays unencrypted
+#   false: off, even with a worker device
+e2ee = "auto"
 log_max_bytes = 2000000
 log_backups = 5
 
