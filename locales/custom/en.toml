@@ -193,3 +193,4 @@
 # lang_set = "🌐 Language set to {language}"
 # lang_unknown = "❌ Unknown language `{code}`. Available: {available}"
 # lang_reset = "🌐 Language reset to the default ({language})"
+# e2ee_unavailable = "⚠️ Call audio encryption is unavailable; playing unencrypted."

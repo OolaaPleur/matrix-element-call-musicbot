@@ -1276,7 +1276,7 @@ class IntegratedBot:
 
         if event_name == "e2ee_unavailable":
             logger.warning("Call audio E2EE unavailable, playing unencrypted: %s", event.get("reason"))
-            await self.send_message(room_id, "⚠️ Call audio encryption is unavailable; playing unencrypted.")
+            await self.send_message(room_id, self._t(room_id, "e2ee_unavailable"))
             return
 
         if event_name == "worker_restart_attempt":
