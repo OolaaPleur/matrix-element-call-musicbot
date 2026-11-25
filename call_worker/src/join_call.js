@@ -1132,6 +1132,9 @@ async function main() {
     const memberId = `${userId}:${deviceId}`;
     const livekitTransport = {
         type: "livekit",
+        // The LiveKit room is named after the Matrix room (MSC4143); Element
+        // assumes that when it's missing, other clients may not.
+        livekit_alias: roomId,
         livekit_service_url: livekitServiceUrl,
     };
 
