@@ -10,6 +10,9 @@ from typing import Any, Awaitable, Callable, Optional
 logger = logging.getLogger(__name__)
 
 _WORKER_PROBLEM_WORDS = ("error", "fatal", "fail", "warn", "timeout", "exception")
+_TERMINAL_EVENTS = {"play_ended", "play_stopped", "play_failed"}
+# Only events someone waits for go into the queue (pongs alone are ~8600 a day).
+_QUEUED_EVENTS = _TERMINAL_EVENTS | {"joined", "error"}
 
 EventHandler = Callable[[dict[str, Any]], Optional[Awaitable[None]]]
 
@@ -151,14 +154,19 @@ class CallWorkerProcess:
     async def stop_playback(self, wait_for_terminal: bool = False, timeout: float = 8.0) -> bool:
         if not self.running:
             return True
+        # Nothing playing: the worker sends no terminal event, so waiting would
+        # time out and count towards a worker restart.
+        was_playing = self._state == "playing"
         await self._send_command({"type": "stop"})
-        if not wait_for_terminal:
+        if not wait_for_terminal or not was_playing:
             return True
 
         terminal_seen = True
         if wait_for_terminal:
             try:
                 await self.wait_for_playback_terminal(timeout=timeout)
+            except RuntimeError:
+                pass  # play_failed: playback ended all the same
             except asyncio.TimeoutError:
                 terminal_seen = False
                 self._consecutive_stop_timeouts += 1
@@ -197,17 +205,28 @@ class CallWorkerProcess:
             self._desired_room_id = None
             await self._stop_locked(clear_desired=True)
 
-    async def wait_for_playback_terminal(self, timeout: Optional[float] = None) -> dict[str, Any]:
-        # Only play_failed ends playback with an error; other worker errors (membership
-        # manager, a bad command) don't mean the track failed.
+    async def wait_for_playback_terminal(
+        self, timeout: Optional[float] = None, expected_source: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Next play_ended/play_stopped (returned) or play_failed (raised).
+
+        With expected_source, events of another source are skipped: after a skip the
+        old track's play_stopped arrives after the new watcher started. Only
+        play_failed is a playback error; other worker errors don't fail the track.
+        """
         async def _next() -> dict[str, Any]:
             while True:
                 event = await self._events.get()
                 event_name = event.get("event")
+                if event_name not in _TERMINAL_EVENTS:
+                    continue
+                source = event.get("source") or event.get("file") or event.get("url")
+                if expected_source and source and source != expected_source:
+                    logger.info("Skipping %s of another track", event_name)
+                    continue
                 if event_name == "play_failed":
                     raise RuntimeError(str(event.get("message", "Playback failed")))
-                if event_name in {"play_ended", "play_stopped"}:
-                    return event
+                return event
 
         if timeout is None:
             return await _next()
@@ -453,7 +472,8 @@ class CallWorkerProcess:
         elif event_name == "left":
             self._state = "idle"
 
-        await self._events.put(event)
+        if event_name in _QUEUED_EVENTS:
+            await self._events.put(event)
 
         if self._event_handler:
             try:

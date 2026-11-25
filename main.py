@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 from logging.handlers import RotatingFileHandler
 
 from bot import IntegratedBot
@@ -70,6 +71,13 @@ async def main():
     config = Config()
     setup_logging(config)
     bot = IntegratedBot(config)
+
+    # SIGTERM (systemctl stop/restart) would otherwise end the process without
+    # running bot.start()'s cleanup: queued scrobbler events would be lost.
+    main_task = asyncio.current_task()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, main_task.cancel)
 
     try:
         await bot.start()

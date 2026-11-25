@@ -385,6 +385,8 @@ class IntegratedBot:
                 raise
             except Exception as exc:
                 logger.warning("Emit %s play_id=%s failed: %r (%s)", kind, content.get("play_id"), exc, details)
+            finally:
+                self._emit_queue.task_done()
 
     def _start_message_dispatcher(self):
         if self._message_dispatch_task and not self._message_dispatch_task.done():
@@ -717,12 +719,11 @@ class IntegratedBot:
             current["file"] = result.get("file")
             current["non_cacheable"] = bool(result.get("non_cacheable"))
             replay_needed = self.audio_queue.loop_mode and self.call_worker.state != "playing"
-
-        if replay_needed:
-            try:
-                await self._advance_queue(room_id, force_next=False, pre_stop=False)
-            except Exception:
-                logger.exception("Failed to resume loop playback after stream prefetch")
+            if replay_needed:
+                try:
+                    await self._advance_queue(room_id, force_next=False, pre_stop=False)
+                except Exception:
+                    logger.exception("Failed to resume loop playback after stream prefetch")
 
     async def _retry_stream_track_as_file(self, room_id: str, track: dict) -> bool:
         source_url = track.get("source_url") if isinstance(track, dict) else None
@@ -883,6 +884,10 @@ class IntegratedBot:
             await self.call_worker.stop_playback(wait_for_terminal=False)
             generation, source_ref = await self._play_track_in_worker(self.audio_queue.current, pre_stop=False)
             self._current_track_started_at = asyncio.get_running_loop().time()
+            # The track restarts from the beginning: close the interrupted play (it
+            # isn't a finished listen) and start a new one for the scrobbler.
+            await self._emit_track_finished(room_id, "stopped")
+            self._start_play_tracking(room_id, self.audio_queue.current)
             self._worker_playback_task = asyncio.create_task(
                 self._wait_for_worker_playback(room_id, generation, source_ref)
             )
@@ -960,6 +965,10 @@ class IntegratedBot:
         return False
 
     def _cancel_worker_playback_wait(self):
+        if self._worker_playback_task is asyncio.current_task():
+            # Called from the watcher itself (play_ended -> _advance_queue): just forget it.
+            self._worker_playback_task = None
+            return
         if self._worker_playback_task and not self._worker_playback_task.done():
             self._worker_playback_task.cancel()
             logger.info("Cancelled worker playback watcher")
@@ -1056,7 +1065,7 @@ class IntegratedBot:
         expected_source: Optional[str],
     ):
         try:
-            event = await self.call_worker.wait_for_playback_terminal()
+            event = await self.call_worker.wait_for_playback_terminal(expected_source=expected_source)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1263,14 +1272,17 @@ class IntegratedBot:
                 f"(track: {duration:.2f}s + buffer: {self.audio_queue.auto_advance_buffer:.2f}s)"
             )
             await asyncio.sleep(total_wait)
-            if expected_generation != self._playback_generation:
-                logger.info("Skipping stale auto-advance timer (generation changed)")
-                return
-            current_source = self._track_source_ref(self.audio_queue.current)
-            if expected_source and current_source and current_source != expected_source:
-                logger.info("Skipping stale auto-advance timer (track changed)")
-                return
-            await self._advance_queue(room_id, from_timer=True)
+            # Under the lock, like every other track change: otherwise a skip running
+            # at the same moment starts a track and this starts another on top of it.
+            async with self._playback_lock:
+                if expected_generation != self._playback_generation:
+                    logger.info("Skipping stale auto-advance timer (generation changed)")
+                    return
+                current_source = self._track_source_ref(self.audio_queue.current)
+                if expected_source and current_source and current_source != expected_source:
+                    logger.info("Skipping stale auto-advance timer (track changed)")
+                    return
+                await self._advance_queue(room_id, from_timer=True)
         except asyncio.CancelledError:
             logger.info("Auto-advance timer cancelled")
             raise
@@ -1392,21 +1404,39 @@ class IntegratedBot:
 
     async def _restore_e2ee_login(self) -> Optional[str]:
         """Load the crypto store before the first sync, so it can decrypt. Returns the device ID."""
-        try:
-            response = await self.client.whoami()
-        except Exception as exc:
-            logger.warning("E2EE setup: whoami failed (%s), skipping E2EE", exc)
-            return None
-        device_id = getattr(response, "device_id", None)
-        if not device_id:
-            logger.warning("E2EE setup: whoami returned no device_id: %s", response)
-            return None
-        logger.info("E2EE: whoami ok user_id=%s device_id=%s", response.user_id, device_id)
-
-        # data/device_id is read by scripts/rotate_access_token.py.
         device_id_file = _DATA_DIR / "device_id"
         try:
             stored = device_id_file.read_text(encoding="utf-8").strip() if device_id_file.exists() else ""
+        except OSError:
+            stored = ""
+
+        # A 5xx (homeserver restarting) comes back as an error response, not an
+        # exception; without the crypto store the bot couldn't read encrypted rooms
+        # until the next restart. Retry, then trust the stored device id.
+        device_id = user_id = None
+        for delay in (2, 4, 8, 16, 0):
+            try:
+                response = await self.client.whoami()
+                device_id = getattr(response, "device_id", None)
+                user_id = getattr(response, "user_id", None)
+            except Exception as exc:
+                response = exc
+            if device_id and user_id:
+                break
+            logger.warning("E2EE setup: whoami failed (%s)%s", response, f", retrying in {delay}s" if delay else "")
+            if delay:
+                await asyncio.sleep(delay)
+        if device_id and user_id:
+            logger.info("E2EE: whoami ok user_id=%s device_id=%s", user_id, device_id)
+        elif stored:
+            device_id, user_id = stored, self.config.MATRIX_USER_ID
+            logger.warning("E2EE: using the stored device_id %s", device_id)
+        else:
+            logger.warning("E2EE setup: no device_id, skipping E2EE")
+            return None
+
+        # data/device_id is read by scripts/rotate_access_token.py.
+        try:
             if stored and stored != device_id:
                 logger.warning("E2EE: device_id changed from %s to %s — crypto store may be stale", stored, device_id)
             if stored != device_id:
@@ -1415,7 +1445,7 @@ class IntegratedBot:
             logger.warning("E2EE: could not persist device_id (%s), continuing", exc)
 
         try:
-            self.client.restore_login(response.user_id, device_id, self.config.MATRIX_ACCESS_TOKEN)
+            self.client.restore_login(user_id, device_id, self.config.MATRIX_ACCESS_TOKEN)
         except Exception as exc:
             logger.warning("E2EE: restore_login failed (%s), skipping E2EE", exc)
             return None
@@ -2449,6 +2479,11 @@ class IntegratedBot:
                     backoff = min(backoff * 2, 300)
         finally:
             if self._emit_task:
+                # Send what's still queued (e.g. the track_finished of a stop just now).
+                try:
+                    await asyncio.wait_for(self._emit_queue.join(), timeout=10)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    logger.warning("Shutdown: %d scrobbler event(s) not sent", self._emit_queue.qsize())
                 self._emit_task.cancel()
             self._cancel_auto_advance()
             self._cancel_advance_watchdog()

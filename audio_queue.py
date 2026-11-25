@@ -341,12 +341,16 @@ class AudioQueue:
             return raw
 
         host = (parsed.hostname or "").lower()
+        youtube_hosts = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
+        path_parts = [part for part in parsed.path.split("/") if part]
         # One spelling per video, as yt-dlp's webpage_url has it: the cache is keyed
         # by it. Share links carry ?si=/&t=/&feature=, which would miss the cache.
         if host == "youtu.be" and parsed.path.strip("/"):
             video_id = parsed.path.strip("/").split("/")[0]
             pairs = [("v", video_id), *parse_qsl(parsed.query, keep_blank_values=True)]
-        elif host in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"} and parsed.path == "/watch":
+        elif host in youtube_hosts and len(path_parts) == 2 and path_parts[0] in {"shorts", "live", "embed"}:
+            pairs = [("v", path_parts[1]), *parse_qsl(parsed.query, keep_blank_values=True)]
+        elif host in youtube_hosts and parsed.path == "/watch":
             pairs = parse_qsl(parsed.query, keep_blank_values=True)
         elif host == "music.youtube.com":
             return urlunparse(parsed._replace(netloc="www.youtube.com"))
@@ -354,6 +358,19 @@ class AudioQueue:
             return raw
         kept = [(k, v) for k, v in pairs if k in YOUTUBE_KEPT_PARAMS]
         return urlunparse(("https", "www.youtube.com", "/watch", "", urlencode(kept, doseq=True), ""))
+
+    @staticmethod
+    def is_single_video_url(url: str) -> bool:
+        """A canonical YouTube video URL (see normalize_media_url): yt-dlp's
+        webpage_url is the same string, so the file's cache name is known upfront."""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False
+        if parsed.netloc != "www.youtube.com" or parsed.path != "/watch":
+            return False
+        keys = {k for k, _ in parse_qsl(parsed.query)}
+        return keys == {"v"}
 
     @staticmethod
     def looks_like_url(value: str) -> bool:
@@ -653,7 +670,11 @@ class AudioQueue:
             resolved = dict(self.search_cache[query_key])
         elif is_direct_url and query_or_url in self._info_cache:
             resolved = dict(self._info_cache[query_or_url])
-        elif not is_direct_url or self._has_local_copy(query_or_url):
+        # Metadata first unless it's a plain video URL: for other URLs (playlists,
+        # other sites) the cache name isn't known until yt-dlp names the source,
+        # so the disk check after a restart would miss and download again.
+        elif (not is_direct_url or self._has_local_copy(query_or_url)
+              or not self.is_single_video_url(query_or_url)):
             resolved_ok, info = await self._resolve_media_info(dlp_cmd, query_or_url)
             if not resolved_ok:
                 return False, info
@@ -731,6 +752,13 @@ class AudioQueue:
                 # next request for it would download the file again.
                 self._remember_info(info, alias=url)
                 resolved = info
+                if info["source_url"] != url:
+                    # Turned out to be another spelling of a track we already have.
+                    hit = await self._cached_result(info)
+                    if hit:
+                        for leftover in self.audio_dir.glob(f"{url_hash}_temp.*"):
+                            leftover.unlink(missing_ok=True)
+                        return True, hit
 
             temp_candidates = [
                 p
@@ -751,10 +779,18 @@ class AudioQueue:
             music_duration = await asyncio.to_thread(self.get_audio_duration, str(temp_file))
 
             if self.preroll_silence > 0:
-                silence_ok = await asyncio.to_thread(
-                    self.add_silence_to_wav, str(temp_file), final_output, self.preroll_silence
+                # Into a temp name first: the final path may be playing right now (a
+                # track queued twice), and a half-written file must never look cached.
+                preroll_output = final_output_path.with_name(
+                    f"{final_output_path.stem}.preroll{final_output_path.suffix}"
                 )
-                if not silence_ok:
+                silence_ok = await asyncio.to_thread(
+                    self.add_silence_to_wav, str(temp_file), str(preroll_output), self.preroll_silence
+                )
+                if silence_ok:
+                    os.replace(preroll_output, final_output)
+                else:
+                    preroll_output.unlink(missing_ok=True)
                     logger.warning("Failed to add pre-roll silence, using original file")
                     temp_file.rename(final_output)
             else:
