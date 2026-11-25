@@ -2,6 +2,12 @@
 
 Discord-style music bot UX for Matrix: chat commands (`!m play`, `!m queue`, `!m skip`, etc.) plus real playback in Element Call.
 
+Based on [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot); this fork adds Matrix room E2EE, cross-signing, scrobbler events, an updated call worker and more.
+
+Related projects:
+- [matrix-element-call-scrobbler](https://github.com/OolaaPleur/matrix-element-call-scrobbler) — scrobbles what this bot plays to Last.fm for everyone in the call
+- [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) — shared cross-signing code
+
 ## Features
 
 - Discord-style chat command workflow in Matrix rooms
