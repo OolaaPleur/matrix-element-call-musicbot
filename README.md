@@ -12,6 +12,9 @@ Related projects:
 - [matrix-element-call-scrobbler](https://github.com/OolaaPleur/matrix-element-call-scrobbler) — scrobbles what this bot plays to Last.fm for everyone in the call
 - [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) — shared cross-signing code
 
+> [!TIP]
+> Issues and pull requests are welcome: bug reports, ideas, translations, fixes. [Open an issue](https://github.com/OolaaPleur/matrix-element-call-musicbot/issues) · [pull requests](https://github.com/OolaaPleur/matrix-element-call-musicbot/pulls)
+
 ## Contents
 
 - [Features](#features)
