@@ -1,3 +1,4 @@
+import json
 import os
 import tomllib
 from pathlib import Path
@@ -6,6 +7,32 @@ from typing import Any, Optional
 
 MIN_AUDIO_CACHE_MAX_BYTES = 200 * 1024 * 1024
 SUPPORTED_AUDIO_DOWNLOAD_FORMATS = {"wav", "mp3", "ogg", "m4a", "opus"}
+
+
+ROOT = Path(__file__).resolve().parent
+# The bot's login (homeserver, user_id, device_id, access_token), written by scripts/setup.py.
+# Kept in data/ rather than the config: it is a secret, and data/ is the bot's own volume.
+CREDENTIALS_FILE = ROOT / "data" / "credentials.json"
+
+
+def load_credentials() -> dict[str, str]:
+    try:
+        data = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str)} if isinstance(data, dict) else {}
+
+
+def save_credentials(data: dict[str, str]) -> None:
+    """Write the login readable by the owner only; the file never exists with wider permissions."""
+    CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CREDENTIALS_FILE.with_name(CREDENTIALS_FILE.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump(data, handle, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, CREDENTIALS_FILE)
 
 
 class Config:
@@ -66,9 +93,13 @@ class Config:
         self.config_file = Path(os.environ.get("CONFIG_FILE", "config.toml"))
         self._toml = self._load_toml_file(self.config_file)
 
-        self.MATRIX_HOMESERVER = self._get_str("MATRIX_HOMESERVER", "matrix", "homeserver")
-        self.MATRIX_USER_ID = self._get_str("MATRIX_USER_ID", "matrix", "user_id")
-        self.MATRIX_ACCESS_TOKEN = self._get_str("MATRIX_ACCESS_TOKEN", "matrix", "access_token")
+        # The login normally comes from data/credentials.json (scripts/setup.py);
+        # env vars or [matrix] in the config override it.
+        stored = load_credentials()
+        self.MATRIX_HOMESERVER = self._get_str("MATRIX_HOMESERVER", "matrix", "homeserver") or stored.get("homeserver")
+        self.MATRIX_USER_ID = self._get_str("MATRIX_USER_ID", "matrix", "user_id") or stored.get("user_id")
+        self.MATRIX_ACCESS_TOKEN = (self._get_str("MATRIX_ACCESS_TOKEN", "matrix", "access_token")
+                                    or stored.get("access_token"))
 
         self.BOT_NAME = self._get_str("BOT_NAME", "bot", "name", default=self.DEFAULTS["bot.name"])
         # Default language of chat messages; `<prefix> lang` overrides it per room.
@@ -334,7 +365,7 @@ class Config:
             raise ValueError(
                 "Missing required configuration values: "
                 + ", ".join(missing)
-                + ". Create config.toml (see config/config.example.toml)."
+                + ". Run scripts/setup.py first (see the README), or set them in [matrix] of the config."
             )
 
     @staticmethod

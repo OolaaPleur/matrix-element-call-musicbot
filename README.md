@@ -64,14 +64,14 @@ The bot does not subscribe to other participants' tracks (`autoSubscribe: false`
 
 The call worker can encrypt the music like Element Call does (LiveKit SFrame, per-participant keys exchanged over Olm). With the default `[worker] e2ee = "auto"` this switches on by itself once the worker device below exists, and stays silently off before that; `true` insists on it (and says so in the room when it can't), `false` turns it off. It needs:
 
-1. **A device of its own.** The keys travel as Olm-encrypted to-device messages, and the bot's own device belongs to matrix-nio, so the worker logs in as a second device of the same account. Create it once (asks for the bot's password, writes `data/worker_device.json`, mode 600):
+1. **A device of its own.** The keys travel as Olm-encrypted to-device messages, and the bot's own device belongs to matrix-nio, so the worker logs in as a second device of the same account. `scripts/setup.py` creates it (`data/worker_device.json`, mode 600). To create it later or replace it, stop the bot and run:
 
    ```bash
    systemctl --user stop matrix-musicbot      # the script refuses while the bot runs
    scripts/create_worker_device.py            # --replace for a new one
    ```
 
-   With Docker (the file goes into the `musicbot_data` volume):
+   With Docker:
 
    ```bash
    docker compose stop musicbot
@@ -122,26 +122,26 @@ When `auto_accept_invites_from` is set, only those users can trigger auto-join; 
 
 ## Cross-Signing and User Verification
 
-The bot automatically bootstraps Matrix cross-signing on startup (master key, self-signing key, user-signing key). This removes the "encrypted by device not verified by its owner" warning next to bot messages.
+The bot signs its own device with the account's cross-signing keys, so its messages don't show "encrypted by a device not verified by its owner". It needs the private keys in `data/cross_signing_keys.json`, and `scripts/setup.py` takes care of them:
 
-### Manual user verification from Element
+- **The account was set up in Element** (the usual case: you created the bot's account there and Element asked you to set up recovery): the account already has keys, and setup asks for that **recovery key** to restore them.
+- **A fresh account** with no keys yet: the bot creates them on first start.
 
-To get a green verified shield on the bot user in Element:
+To restore them later (skipped in setup, lost `data/`), run this in the bot's directory and restart the bot:
 
-1. Run the fingerprint script from the project root:
-   ```
-   python scripts/show_cross_signing_fingerprint.py
-   ```
-2. In Element, open the bot user profile → **Verify User** → **Verify manually**
-3. Compare the master key shown in Element with the `Master key (grouped)` line from the script output
-4. Confirm in Element
-
-Add `--check-server` to also verify the local key matches what is currently uploaded (requires the bot to be running with a live token):
-```
-python scripts/show_cross_signing_fingerprint.py --check-server
+```bash
+python3 -m matrix_bot_common.restore_keys
+docker compose exec musicbot python3 -m matrix_bot_common.restore_keys   # Docker
 ```
 
-Private keys are stored in `data/cross_signing_keys.json` (chmod 600, gitignored). If this file is deleted, the bot will initiate a new cross-signing reset on next startup.
+**No recovery key?** The bot can replace the account's keys, but only when asked to: start it once with `CROSS_SIGNING_ALLOW_RESET=1` (Docker: add it under `environment:` in `docker-compose.yml`, remove it afterwards). On homeservers with OAuth login (matrix.org) the log then shows a link: open it, log in as the bot, approve the reset, and restart the bot. Everyone who verified the bot has to verify it again.
+
+### Verifying the bot (optional)
+
+Verification only adds the green shield: it confirms to you that this bot is yours. From your own account in Element, open the bot's profile → **Verify**:
+
+- If the bot's account is still logged in to Element somewhere (e.g. the browser session you created it in), accept the request there and compare the emoji.
+- Otherwise compare the keys by hand: print the bot's master key with `python3 scripts/show_cross_signing_fingerprint.py` (Docker: `docker compose exec musicbot python3 scripts/show_cross_signing_fingerprint.py`) and compare it with the one Element shows (**Verify manually**, where your Element version offers it). `--check-server` also checks that the local key matches the one on the server.
 
 ## Troubleshooting
 
@@ -260,7 +260,8 @@ Everything the bot keeps lives in `data/` (the `musicbot_data` volume with Docke
 | File | What it is | If it's lost |
 |---|---|---|
 | `crypto_store/` | The bot device's E2EE keys (matrix-nio) | The bot can't decrypt older messages; log in again as a new device |
-| `cross_signing_keys.json` | Private cross-signing keys | The bot resets cross-signing on the next start; users have to verify it again |
+| `credentials.json` | The bot's login (homeserver, user ID, device, access token), from `setup.py` | Run `setup.py` again: a new device, see `crypto_store/` |
+| `cross_signing_keys.json` | Private cross-signing keys | New devices stay unsigned until you restore the keys (recovery key) or replace them; see [Cross-Signing](#cross-signing-and-user-verification) |
 | `device_id` | The bot's device ID | Used by `rotate_access_token.py` and as a fallback at start |
 | `worker_device.json`, `worker_crypto_store.v8` | The call worker's device and its E2EE keys | No call audio E2EE until `create_worker_device.py --replace` |
 | `saved_queues.json`, `room_languages.json` | Saved queues, per-room languages | Gone, nothing else breaks |
@@ -271,13 +272,13 @@ Back up while the bot is stopped: `crypto_store/` is an SQLite database, a copy 
 
 ### Rotating the access token
 
-`scripts/rotate_access_token.py` logs in with the password and the same device ID, so the old token stops working while the device and its keys stay. It writes the new token into `config.toml` (never prints it) and restarts the `matrix-musicbot` systemd user service; with Docker, put the token into `config/config.toml` yourself and restart the container.
+`scripts/rotate_access_token.py` logs in with the password and the same device ID, so the old token stops working while the device and its keys stay. It saves the new token in `data/credentials.json` (never prints it); restart the bot afterwards (`--restart` restarts the `matrix-musicbot` systemd user unit). With Docker: `docker compose run --rm musicbot python3 scripts/rotate_access_token.py`, then `docker compose restart`.
 
 ## Docker
 
 The bot runs from the prebuilt image `ghcr.io/oolaapleur/matrix-element-call-musicbot`, published by CI for every change; the clone is only for `docker-compose.yml` and the example config.
 
-`scripts/create_access_token.py` asks for the bot's user ID and password, logs it in once (that login is the bot's device) and writes the result into the config. Don't use the token Element shows in its settings: it belongs to that Element session and, on matrix.org, expires within minutes.
+`scripts/setup.py` asks for the bot's user ID and password and does the whole account setup in one run: logs the bot in (the login is kept in the data volume, the config holds no secrets), restores its cross-signing keys if the account has them (asks for the recovery key, see [Cross-Signing](#cross-signing-and-user-verification)) and creates the call worker's device for encrypted call audio. Run it again if a step failed: done steps are skipped.
 
 ### Linux
 
@@ -286,14 +287,10 @@ git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
 cd matrix-element-call-musicbot
 
 cp config/config.example.toml config/config.toml
-python3 scripts/create_access_token.py   # logs the bot in, writes homeserver, user_id, access_token into the config
-nano config/config.toml          # optional: the rest of the settings
+nano config/config.toml          # settings (optional, the defaults work)
 
-# The bot runs as uid 10001 in the container and the config holds the token:
-chmod 600 config/config.toml
-sudo chown 10001 config/config.toml
-
-docker compose up -d             # download the image and start the bot
+docker compose run --rm musicbot python3 scripts/setup.py   # login, cross-signing keys, call worker device
+docker compose up -d             # start the bot
 docker compose logs -f           # watch it start (Ctrl+C to stop watching)
 ```
 
@@ -315,9 +312,9 @@ git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
 Set-Location .\matrix-element-call-musicbot
 
 Copy-Item .\config\config.example.toml .\config\config.toml
-docker compose run --rm musicbot python3 scripts/create_access_token.py   # prints homeserver, user_id, access_token (the config is read-only in the container)
-notepad .\config\config.toml     # paste those three lines into [matrix]
+notepad .\config\config.toml     # settings (optional, the defaults work)
 
+docker compose run --rm musicbot python3 scripts/setup.py
 docker compose up -d
 docker compose logs -f
 ```
@@ -325,7 +322,7 @@ docker compose logs -f
 ### Good to know
 
 - Bot data (crypto stores, saved queues, room languages) is kept in the `musicbot_data` volume; see [Data and Backups](#data-and-backups).
-- Call audio E2EE: create the worker device as shown in [Call audio E2EE](#call-audio-e2ee-optional); the image already has the rtc-node fix.
+- Call audio E2EE works out of the box: `setup.py` creates the worker device and the image has the rtc-node fix (see [Call audio E2EE](#call-audio-e2ee-optional)).
 - Build it yourself (e.g. with your own changes): uncomment `build: .` in `docker-compose.yml` and run `docker compose up -d --build`; the build fetches the shared library from GitHub, so no second clone is needed.
 
 ## Run Without Docker (Raw)
@@ -348,8 +345,8 @@ bun install --cwd call_worker --frozen-lockfile
 python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see "Call audio E2EE"
 
 cp config/config.example.toml config.toml
-python3 scripts/create_access_token.py   # logs the bot in, writes homeserver, user_id, access_token into config.toml
-nano config.toml                      # optional: the rest of the settings
+nano config.toml                      # settings (optional, the defaults work)
+python3 scripts/setup.py              # login, cross-signing keys, call worker device (see "Docker")
 
 python3 main.py
 ```
@@ -359,7 +356,7 @@ Requires: Python 3.11+, Node.js 22+, Bun (installs the call worker's dependencie
 > [!NOTE]
 > `requirements.txt` references `../matrix-element-call-common` (the shared library). Both repos must be cloned into the same parent directory for this to resolve correctly.
 
-To keep it running, a systemd user service (`~/.config/systemd/user/matrix-musicbot.service`, the name `rotate_access_token.py` restarts):
+To keep it running, a systemd user service (`~/.config/systemd/user/matrix-musicbot.service`, the name `rotate_access_token.py --restart` restarts):
 
 ```ini
 [Unit]

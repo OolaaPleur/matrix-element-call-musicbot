@@ -4,10 +4,11 @@
 # HARD REQUIREMENT TO RUN
 # ==============================
 [matrix]
-# Filled in by: python3 scripts/create_access_token.py
-homeserver = "https://matrix.example.org"
-user_id = "@musicbot:example.org"
-access_token = "YOUR_MATRIX_ACCESS_TOKEN"
+# The bot's login comes from scripts/setup.py, which keeps it in
+# data/credentials.json. Set these only to override it:
+# homeserver = "https://matrix.example.org"
+# user_id = "@musicbot:example.org"
+# access_token = "..."
 
 
 # ==============================

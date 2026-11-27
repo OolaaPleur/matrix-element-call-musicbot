@@ -20,11 +20,13 @@ python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE,
 cp config/config.example.toml config/config.toml
 # The active config is config.toml at the ROOT of the project, NOT config/config.toml.
 # Always edit the root-level config.toml — config/config.toml is just the example template.
+python3 scripts/setup.py   # bot login -> data/credentials.json, cross-signing keys, worker device
 python3 main.py
 ```
 
 **Docker:**
 ```bash
+docker compose run --rm musicbot python3 scripts/setup.py
 docker compose up -d --build
 docker compose logs -f musicbot
 ```
@@ -87,7 +89,8 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - The worker connects to LiveKit with `autoSubscribe: false` (since 2026-11-15; was `true`): it only publishes music and never receives other participants' tracks.
 - E2EE via `matrix-nio`'s `SqliteStore` in `data/crypto_store/`
 - On startup, `matrix_bot_common.cross_signing:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs (from the shared [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) package)
-- Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored)
+- Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored). An account that already has keys (set up in Element: the usual case) gets them from secret storage via `matrix_bot_common.restore_keys` (setup.py step 2, asks for the recovery key); without the file the bot never replaces existing keys unless `CROSS_SIGNING_ALLOW_RESET=1`
+- Login: `scripts/setup.py` (password, once) writes `data/credentials.json` (homeserver, user_id, device_id, access_token; 0600); `Config` uses it unless env or `[matrix]` in the config set the values, so the config holds no secrets. setup.py is idempotent (re-checks a saved token with whoami, re-logs in on 401). Shared script helpers: `scripts/_matrix.py`
 - Megolm retry: undecryptable events are retried at 3/8/20/60s intervals after requesting room keys
 - Device verification: use `/verify <device_id> <ed25519_fingerprint>` in Element as `@youruser:matrix.org`
   - `device_id`: `cat data/device_id`
@@ -95,7 +98,7 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
   - Or use `python scripts/show_cross_signing_fingerprint.py` for the cross-signing key
 
 ### Configuration (`config.py` — `Config`)
-- Reads from `config.toml` (or path from `CONFIG_FILE` env var) plus env variable overrides
+- Reads from `config.toml` (or path from `CONFIG_FILE` env var) plus env variable overrides; the Matrix login falls back to `data/credentials.json`
 - Every config key has a matching env variable (e.g., `NORMALIZE_AUDIO`, `WORKER_MEMBERSHIP_MODE`)
 - Also reads `.env` files (key=value) if present in project root
 - See `config/config.example.toml` for all options with comments

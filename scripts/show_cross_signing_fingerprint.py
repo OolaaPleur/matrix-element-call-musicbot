@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import _matrix
+
 try:
     from nacl.signing import SigningKey
 except ImportError:
@@ -14,7 +16,6 @@ except ImportError:
     sys.exit(1)
 
 KEYS_PATH = Path(__file__).resolve().parent.parent / "data" / "cross_signing_keys.json"
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.toml"
 
 
 def _unb64(s: str) -> bytes:
@@ -29,20 +30,12 @@ def _load_keys() -> dict:
 
 
 def _read_config() -> tuple[str, str, str]:
-    """Return (homeserver, user_id, access_token) from config.toml."""
+    """Return (homeserver, user_id, access_token): data/credentials.json, or [matrix] in the config."""
     try:
-        import tomllib  # Python 3.11+
-    except ImportError:
-        try:
-            import tomli as tomllib
-        except ImportError:
-            return ("(install tomllib/tomli to read config)", "(unknown)", "(unknown)")
-    try:
-        data = tomllib.loads(CONFIG_PATH.read_text())
-        m = data.get("matrix", {})
-        return m.get("homeserver", ""), m.get("user_id", ""), m.get("access_token", "")
+        login = _matrix.bot_login()
     except Exception as e:
         return ("", f"(config read error: {e})", "")
+    return login.get("homeserver", ""), login.get("user_id", ""), login.get("access_token", "")
 
 
 async def _check_server(homeserver: str, token: str, user_id: str, expected_pub: str) -> None:
@@ -63,7 +56,7 @@ async def _check_server(homeserver: str, token: str, user_id: str, expected_pub:
 
     if status == 401:
         print(f"  Skipped: access token rejected (M_UNKNOWN_TOKEN / soft_logout).")
-        print("  Start the bot first, then copy the live token from config to check.")
+        print("  Is the bot's token still valid? (scripts/rotate_access_token.py)")
         return
     if status != 200:
         print(f"  WARNING: server returned {status}: {data}")
