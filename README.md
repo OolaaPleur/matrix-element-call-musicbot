@@ -34,7 +34,7 @@ Related projects:
 - Full Matrix E2EE with cross-signing; encrypted call audio, like Element Call's own
 - Optional track events for the companion Last.fm scrobbler
 
-Current limitation: one active playback session at a time.
+Current limitation: plays in one room at a time (one call session per bot).
 
 ## Install
 
