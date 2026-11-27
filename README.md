@@ -128,13 +128,28 @@ All commands start with the prefix (`!m` by default); the short form is in brack
   <img src="assets/commands.gif" width="860"/>
 </p>
 
-### Playback
+The ones you need most:
+
+| Command | What it does |
+|---|---|
+| `!m play <url or search>` | Play a link (YouTube, YouTube Music, Spotify) or the first search result; joins the call |
+| `!m search <query>` | List 5 results, then `!m play <n>` |
+| `!m queue` | Show the queue with ETA |
+| `!m skip` · `!m pause` · `!m stop` | Skip, pause/resume, stop and clear the queue |
+| `!m volume <0-200>` | Playback volume |
+| `!m leave` | Leave the call |
+| `!m help` | All commands |
+
+<details>
+<summary>All commands</summary>
+
+#### Playback
 
 - `!m help` (`h`) — show this help
 - `!m join` (`j`) — join Element Call in this room
 - `!m leave` (`lv`) — leave current Element Call
 - `!m play` (`p`) `<url-or-query>` — add track and auto-join call if needed
-  - Spotify links (track, album, playlist, artist; `open.spotify.com/...`, `spotify:track:...`, `spotify.link/...`) are looked up on YouTube by artist + title — Spotify audio itself is DRM-protected. Albums/playlists: first 100 tracks; podcasts are not supported.
+  - Spotify links (tracks, albums, playlists, artists; first 100 tracks, no podcasts) are looked up on YouTube by artist + title
 - `!m playnext` (`pn`, `next`) `<url-or-query>` — add a single track to the front of the queue
 - `!m search` (`sr`, `find`) `<query>` — list the top 5 YouTube results; then `!m play <n>` or `!m playnext <n>` (for 5 minutes)
 - `!m queue` (`q`) — show queue with ETA, and the playlist tracks not loaded yet
@@ -147,7 +162,7 @@ All commands start with the prefix (`!m` by default); the short form is in brack
 - `!m shuffle` (`sh`, `random`) — shuffle the upcoming tracks (also the not-yet-downloaded rest of a playlist or saved queue)
 - `!m history` (`hist`) — show recent playback history
 
-### Saved Queues
+#### Saved Queues
 
 - `!m save` (`sv`) `<name> [--force]` — save current+upcoming queue
 - `!m load` (`ld`) `<name>` — load a saved queue
@@ -155,7 +170,7 @@ All commands start with the prefix (`!m` by default); the short form is in brack
 - `!m deletequeue` (`dq`) `<name>` — delete a saved queue
 - `!m renamequeue` (`rq`) `<old> <new>` — rename a saved queue
 
-### Audio & Info
+#### Audio & Info
 
 - `!m audio` (`a`) — show current audio settings
 - `!m normalize` (`norm`) `on|off` — toggle normalization
@@ -167,9 +182,11 @@ All commands start with the prefix (`!m` by default); the short form is in brack
 - `!m config` (`cfg`) — show active config
 - `!m defaults` (`df`) — show default config values
 
+</details>
+
 ## Configuration
 
-Every setting is listed with its default in [`config/config.example.toml`](config/config.example.toml) (`!m defaults` shows them too, `!m config` the active values). Restart the bot after a change. The ones you are most likely to touch:
+Every setting is listed with its default in [`config/config.example.toml`](config/config.example.toml) (`!m defaults` shows them too, `!m config` the active values). Restart the bot after a change. The ones you are most likely to touch (stereo, bitrate, proxy, search and streaming options are in the example config):
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -180,13 +197,7 @@ Every setting is listed with its default in [`config/config.example.toml`](confi
 | `bot.scrobbler_events` | `false` | Track events for the [scrobbler bot](#companion-scrobbler-bot) |
 | `audio.volume_percent` | `100` | Start volume, 0–200 (logarithmic up to 100) |
 | `audio.ytdlp_cookies_file` | unset | Cookies for yt-dlp when YouTube asks to sign in (see [Troubleshooting](#troubleshooting)) |
-| `audio.proxy` | `""` | Proxy for yt-dlp |
-| `audio.search_mode` | `"fast"` | `fast`: short network timeouts, search results cached in memory; `accurate`: always asks YouTube again, no short timeouts |
-| `audio.stream_first_idle` | `true` | When nothing is playing, stream the track right away instead of downloading it first (the file is fetched in the background as a fallback) |
-| `worker.stereo` | `true` | Two-channel audio in the call; `false` = mono, like a voice call |
-| `worker.audio_bitrate_kbps` | `128` | Opus bitrate of the music; `0` = LiveKit's default (voice-oriented, lower) |
 | `worker.e2ee` | `"auto"` | Call audio encryption: `auto` = on once the worker device exists, `true` = on and complain in the room if it can't be, `false` = off ([details](docs/e2ee.md#call-audio-e2ee)) |
-| `ui.quiet_mode` | `true` | Drop progress chatter ("Searching…", "Downloading…"); answers and errors are always sent |
 
 ### Languages
 
@@ -234,7 +245,3 @@ Verification adds the green shield: it confirms to you that this bot is really y
 ## Data and Backups
 
 Everything the bot keeps lives in `data/` (the `musicbot_data` volume with Docker): its login, E2EE keys, cross-signing keys, saved queues and room languages. Back it up while the bot is stopped; the crypto files can't be recreated without side effects. Downloaded tracks (`musicbot_cache`) can be left out. What each file is, and how to rotate the access token: [docs/data.md](docs/data.md).
-
-## Attribution
-
-Forked from [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot). Shared Matrix bot utilities: [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common).
