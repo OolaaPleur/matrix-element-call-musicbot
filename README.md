@@ -245,3 +245,7 @@ Verification adds the green shield: it confirms to you that this bot is really y
 ## Data and Backups
 
 Everything the bot keeps lives in `data/` (the `musicbot_data` volume with Docker): its login, E2EE keys, cross-signing keys, saved queues and room languages. Back it up while the bot is stopped; the crypto files can't be recreated without side effects. Downloaded tracks (`musicbot_cache`) can be left out. What each file is, and how to rotate the access token: [docs/data.md](docs/data.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE). Based on [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot) (MIT).
