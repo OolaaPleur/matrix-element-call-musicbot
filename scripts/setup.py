@@ -119,7 +119,7 @@ def step_login(password, change=False):
                 return login
             overridden = config_overrides("matrix", ["homeserver", "user_id", "access_token"])
             if overridden:
-                say(f"[matrix] {', '.join(overridden)} in the config override this; change it there.")
+                say(f"[matrix] {', '.join(overridden)} in the config (legacy) override this; remove it there.")
                 return login
             new_id = input(INDENT + "Enter to keep, or another account's user ID: ").strip()
             if not new_id or new_id == login["user_id"]:
