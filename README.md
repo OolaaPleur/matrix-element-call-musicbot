@@ -136,6 +136,8 @@ docker compose exec musicbot python3 -m matrix_bot_common.restore_keys   # Docke
 
 **No recovery key?** The bot can replace the account's keys, but only when asked to: start it once with `CROSS_SIGNING_ALLOW_RESET=1` (Docker: add it under `environment:` in `docker-compose.yml`, remove it afterwards). On homeservers with OAuth login (matrix.org) the log then shows a link: open it, log in as the bot, approve the reset, and restart the bot. Everyone who verified the bot has to verify it again.
 
+**After a reinstall** (or a lost `data/`), log the bot's old sessions out: in Element logged in as the bot, Settings → Sessions, sign out every session but the current ones (the bot's and the call worker's). They no longer work, but everyone's clients keep sending them room keys, and unsigned ones can show as unverified sessions of the bot.
+
 ### Verifying the bot (recommended)
 
 Verification adds the green shield: it confirms to you that this bot is really yours. It takes a minute, by comparing emoji:
