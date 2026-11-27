@@ -38,7 +38,7 @@ Current limitation: plays in one room at a time (one call session per bot).
 
 ## Install
 
-You need a Matrix account for the bot and Docker. The bot runs from the prebuilt image `ghcr.io/oolaapleur/matrix-element-call-musicbot`; the clone only provides `docker-compose.yml` and the example config.
+You need a Matrix account for the bot, Git and Docker with Compose v2 (`docker compose version` must work; on Windows see [Prerequisites on Windows](#prerequisites-on-windows)). The bot runs from the prebuilt image `ghcr.io/oolaapleur/matrix-element-call-musicbot`; the clone only provides `docker-compose.yml` and the example config.
 
 `scripts/setup.py` asks for the bot's user ID and password and for your own user ID (the bot joins rooms you invite it to; Enter to skip). It logs the bot in (the login is kept in the data volume, the config holds no secrets), restores the cross-signing keys with the account's recovery key ([Cross-Signing](#cross-signing)) and creates the call worker's device for encrypted call audio. Run it again if a step failed: done steps are skipped.
 
@@ -77,8 +77,25 @@ docker compose up -d
 
 ### Windows (PowerShell)
 
-> [!WARNING]
-> Not tested on Windows. Docker Desktop runs the same Linux image, so it should work; reports welcome.
+Linux is the recommended host for the bot (a server, VPS or home machine that runs 24/7); use Windows only if you have no Linux machine. Tested on Windows 11 Home with Docker Desktop (WSL 2) and Windows PowerShell 5.1.
+
+Don't join the call from the same Windows PC the bot runs on: listening there can cause short audio stutters. Listen from another device.
+
+#### Prerequisites on Windows
+
+In a normal (not administrator) PowerShell; each installer asks for administrator rights itself:
+
+```powershell
+winget install --id Git.Git -e
+wsl --install --no-distribution
+winget install --id Docker.DockerDesktop -e
+```
+
+Then **reboot**. `--no-distribution` installs only the WSL 2 platform that Docker Desktop needs, no Linux distribution; you never have to open WSL yourself. If Docker Desktop says *Virtual Machine Platform is not enabled* right after the install, you skipped the reboot.
+
+Start Docker Desktop and wait for **Engine running**, then open a **new** PowerShell window, so `git` and `docker` are found. Docker Desktop has to run whenever the bot runs: enable Settings → General → *Start Docker Desktop when you sign in to your computer*.
+
+#### Install
 
 ```powershell
 git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
@@ -92,6 +109,8 @@ docker compose run --rm musicbot python3 scripts/setup.py
 docker compose up -d
 docker compose logs -f
 ```
+
+Updating and changing setup's answers work with the same commands as on Linux.
 
 ### Other ways
 
@@ -200,6 +219,10 @@ Verification adds the green shield: it confirms to you that this bot is really y
 4. Done. You can log the bot's Element session out afterwards; the bot itself is not affected.
 
 ## Troubleshooting
+
+**`failed to connect to the docker API at npipe:////./pipe/docker_engine`** (Windows). Docker Desktop isn't running: start it and wait for *Engine running*.
+
+**Short audio stutters when the bot runs on Windows.** If you listen to the call on the same PC the bot runs on, the audio can drop for a fraction of a second now and then. Listen from another device (phone, tablet, another PC).
 
 **"Sign in to confirm you're not a bot" from YouTube.** YouTube wants a signed-in session from your server's IP. Export cookies of a YouTube session from your browser in Netscape format (e.g. with a "cookies.txt" extension), point `audio.ytdlp_cookies_file` at the file and restart. If yt-dlp later says the cookies are no longer valid, export them again (or comment the setting out).
 

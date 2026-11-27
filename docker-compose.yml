@@ -15,7 +15,12 @@ services:
       - musicbot_data:/app/data
       - musicbot_cache:/app/cache
 
+# Fixed names: the same whatever the clone's folder is called (compose would
+# otherwise prefix them with it), and what the README calls them.
 volumes:
   musicbot_logs:
+    name: musicbot_logs
   musicbot_data:
+    name: musicbot_data
   musicbot_cache:
+    name: musicbot_cache

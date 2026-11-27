@@ -41,6 +41,8 @@ RUN useradd -m -u 10001 musicbot \
 USER musicbot
 
 ENV PYTHONUNBUFFERED=1
+# Tells scripts/setup.py how to say "start the bot".
+ENV BOT_IN_DOCKER=1
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD pgrep -f "python3 main.py" > /dev/null || exit 1
