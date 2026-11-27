@@ -19,8 +19,8 @@ pip install -r requirements.txt   # resolves ../matrix-element-call-common autom
 bun install --cwd call_worker --frozen-lockfile
 python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see docs/e2ee.md
 
-cp config/config.example.toml config.toml
-nano config.toml                      # settings (optional, the defaults work)
+cp config/config.example.toml config/config.toml
+nano config/config.toml               # settings (optional, the defaults work)
                                       # e.g. [bot] scrobbler_events = true for the companion scrobbler
 python3 scripts/setup.py              # login, cross-signing keys, call worker device
 

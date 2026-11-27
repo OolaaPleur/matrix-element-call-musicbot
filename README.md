@@ -156,7 +156,7 @@ Every setting is listed with its default in [`config/config.example.toml`](confi
 | Setting | Default | What it does |
 |---|---|---|
 | `bot.command_prefix` | `"!m"` | Command prefix, e.g. `"!music"` or `"!dj"` |
-| `bot.auto_accept_invites_from` | the user from setup | Users whose room invites the bot accepts, e.g. `["@you:matrix.org", "@friend:matrix.org"]`; replaces the one from setup |
+| `bot.auto_accept_invites_from` | the users from setup | Users whose room invites the bot accepts, e.g. `["@you:matrix.org", "@friend:matrix.org"]`; replaces the ones from setup (or change them by running setup again) |
 | `bot.auto_accept_invites` | `false` | Accept invites from anyone (only when `auto_accept_invites_from` is empty) |
 | `bot.language` | `"en"` | Language of the bot's messages; `!m lang` overrides it per room (see [Languages](#languages)) |
 | `bot.scrobbler_events` | `false` | Track events for the [scrobbler bot](#companion-scrobbler-bot) |

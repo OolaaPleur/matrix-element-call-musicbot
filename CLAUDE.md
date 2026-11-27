@@ -17,9 +17,7 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 bun install --cwd call_worker --frozen-lockfile
 python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see below
-cp config/config.example.toml config/config.toml
-# The active config is config.toml at the ROOT of the project, NOT config/config.toml.
-# Always edit the root-level config.toml — config/config.toml is just the example template.
+cp config/config.example.toml config/config.toml   # optional; the bot reads CONFIG_FILE, else ./config.toml, else config/config.toml
 python3 scripts/setup.py   # bot login -> data/credentials.json, cross-signing keys, worker device
 python3 main.py
 ```
@@ -89,13 +87,10 @@ Requirements: Python 3.11+, Node.js 22+, ffmpeg, yt-dlp (all in PATH). No test s
 - The worker connects to LiveKit with `autoSubscribe: false` (since 2026-11-15; was `true`): it only publishes music and never receives other participants' tracks.
 - E2EE via `matrix-nio`'s `SqliteStore` in `data/crypto_store/`
 - On startup, `matrix_bot_common.cross_signing:ensure_cross_signing()` uploads/re-uploads master/self-signing/user-signing Ed25519 keypairs (from the shared [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) package)
-- Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored). An account that already has keys (set up in Element: the usual case) gets them from secret storage via `matrix_bot_common.restore_keys` (setup.py step 2, asks for the recovery key); without the file the bot never replaces existing keys unless `CROSS_SIGNING_ALLOW_RESET=1`
-- Login: `scripts/setup.py` (password, once) writes `data/credentials.json` (homeserver, user_id, device_id, access_token, owners; 0600; owners = default `auto_accept_invites_from`); `Config` takes the login from it only, so the config holds no secrets. setup.py is idempotent (re-checks a saved token with whoami, re-logs in on 401); once every step is done it offers a change pass (other account: per-account files moved to `data/previous-account-<ts>/`; owners; restore keys again; replace worker device); `auto_accept_invites_from` in the config wins over the owners. Shared script helpers: `scripts/_matrix.py`
+- Private keys stored in `data/cross_signing_keys.json` (chmod 600, gitignored). An account that already has keys (set up in Element: the usual case) gets them from secret storage via `matrix_bot_common.restore_keys` (setup.py step 3, asks for the recovery key); without the file the bot never replaces existing keys unless `CROSS_SIGNING_ALLOW_RESET=1`
+- Login: `scripts/setup.py` (password, once) writes `data/credentials.json` (homeserver, user_id, device_id, access_token, owners; 0600; owners = default `auto_accept_invites_from`); `Config` takes the login from it only, so the config holds no secrets. setup.py is idempotent (re-checks a saved token with whoami, re-logs in on 401); once every step is done it offers a change pass (other account: logs in to the new one first, then logs the old bot/worker devices out and moves per-account files to `data/previous-account-<ts>/`; owners; restore keys again; replace worker device); `auto_accept_invites_from` in the config or `AUTO_ACCEPT_INVITES_FROM` in the env wins over the owners (any value, even empty; setup's `owners_overridden()` mirrors that). Shared script helpers: `scripts/_matrix.py`
 - Megolm retry: undecryptable events are retried at 3/8/20/60s intervals after requesting room keys
-- Device verification: use `/verify <device_id> <ed25519_fingerprint>` in Element as `@youruser:matrix.org`
-  - `device_id`: `cat data/device_id`
-  - fingerprint: query the server — `curl -s "https://<homeserver>/_matrix/client/v3/keys/query" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"device_keys":{"@yourbotname:matrix.org":["<device_id>"]}}' | python3 -m json.tool`
-  - Or use `python scripts/show_cross_signing_fingerprint.py` for the cross-signing key
+- Device verification: the bot signs its own devices; users verify the bot (green shield) by comparing emoji with the bot's own Element session (README). `scripts/show_cross_signing_fingerprint.py` prints the master key for manual comparison
 
 ### Configuration (`config.py` — `Config`)
 - Reads from `config.toml` (or path from `CONFIG_FILE` env var) plus env variable overrides; the Matrix login comes from `data/credentials.json` only (no `[matrix]` in the config, no `MATRIX_*` env vars, removed 2026-11-27)

@@ -89,7 +89,7 @@ class Config:
     }
 
     def __init__(self):
-        self.config_file = Path(os.environ.get("CONFIG_FILE", "config.toml"))
+        self.config_file = self._find_config_file()
         self._toml = self._load_toml_file(self.config_file)
 
         # The login comes from data/credentials.json (scripts/setup.py) only.
@@ -372,6 +372,19 @@ class Config:
                 + ", ".join(missing)
                 + ". Run scripts/setup.py first (see the README)."
             )
+
+    @staticmethod
+    def _find_config_file() -> Path:
+        """CONFIG_FILE, else config.toml, else config/config.toml (relative paths
+        against the bot directory); scripts/_matrix.py:config_path uses the same order."""
+        env = os.environ.get("CONFIG_FILE")
+        if env:
+            path = Path(env)
+            return path if path.is_absolute() else ROOT / path
+        for path in (ROOT / "config.toml", ROOT / "config" / "config.toml"):
+            if path.is_file():
+                return path
+        return ROOT / "config" / "config.toml"
 
     @staticmethod
     def _load_toml_file(path: Path) -> dict[str, Any]:

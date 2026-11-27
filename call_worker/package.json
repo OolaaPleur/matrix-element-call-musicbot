@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@livekit/rtc-node": "^1.2.2",
-    "dotenv": "^18.0.10",
     "fake-indexeddb": "6.2.8",
     "matrix-js-sdk": "^45.1.0"
   }

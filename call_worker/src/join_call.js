@@ -3,7 +3,6 @@ const readline = require("readline");
 const { spawn } = require("child_process");
 const fs = require("fs");
 
-const dotenv = require("dotenv");
 const { createClient, ClientEvent, MemoryStore } = require("matrix-js-sdk");
 const { PersistentCryptoStore, UnreadableCryptoStoreError } = require("./crypto-store");
 const { logger: rootLogger } = require("matrix-js-sdk/lib/logger");
@@ -20,9 +19,6 @@ const {
 const { MediaKeyBridge, e2eeRoomOptions, crossSignOwnDevice, rtcNodeSupportsKeyedE2ee } = require("./e2ee");
 
 rootLogger.setLevel("WARN");
-
-dotenv.config({ path: path.resolve(process.cwd(), "../.env"), quiet: true });
-dotenv.config({ path: path.resolve(process.cwd(), ".env"), override: false, quiet: true });
 
 const SAMPLE_RATE = 48_000;
 // 2 = stereo music; 1 = mono (what the worker always sent before).
