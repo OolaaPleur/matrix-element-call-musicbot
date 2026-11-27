@@ -4,7 +4,7 @@
 # HARD REQUIREMENT TO RUN
 # ==============================
 [matrix]
-# Get all three with: python3 scripts/get_access_token.py
+# Filled in by: python3 scripts/get_access_token.py
 homeserver = "https://matrix.example.org"
 user_id = "@musicbot:example.org"
 access_token = "YOUR_MATRIX_ACCESS_TOKEN"
