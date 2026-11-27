@@ -129,10 +129,13 @@ class Config:
             self._get_str("COMMAND_PREFIX", "bot", "command_prefix", default=self.DEFAULTS["bot.command_prefix"])
             or self.DEFAULTS["bot.command_prefix"]
         )
-        self.AUDIO_DIR = Path(
+        audio_dir = Path(
             self._get_str("AUDIO_DIR", "paths", "audio_dir", default=self.DEFAULTS["paths.audio_dir"])
             or self.DEFAULTS["paths.audio_dir"]
-        )
+        ).expanduser()
+        # Absolute: the call worker (and its ffmpeg) runs in call_worker/, so a
+        # relative path would point somewhere else there.
+        self.AUDIO_DIR = audio_dir if audio_dir.is_absolute() else ROOT / audio_dir
         self.SAVED_QUEUES_FILE = Path(
             self._get_str("SAVED_QUEUES_FILE", "paths", "saved_queues_file", default=self.DEFAULTS["paths.saved_queues_file"])
             or self.DEFAULTS["paths.saved_queues_file"]
