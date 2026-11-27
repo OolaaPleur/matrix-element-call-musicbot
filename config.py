@@ -15,15 +15,15 @@ ROOT = Path(__file__).resolve().parent
 CREDENTIALS_FILE = ROOT / "data" / "credentials.json"
 
 
-def load_credentials() -> dict[str, str]:
+def load_credentials() -> dict:
     try:
         data = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return {k: v for k, v in data.items() if isinstance(v, str)} if isinstance(data, dict) else {}
+    return data if isinstance(data, dict) else {}
 
 
-def save_credentials(data: dict[str, str]) -> None:
+def save_credentials(data: dict) -> None:
     """Write the login readable by the owner only; the file never exists with wider permissions."""
     CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = CREDENTIALS_FILE.with_name(CREDENTIALS_FILE.name + ".tmp")
@@ -96,10 +96,11 @@ class Config:
         # The login normally comes from data/credentials.json (scripts/setup.py);
         # env vars or [matrix] in the config override it.
         stored = load_credentials()
-        self.MATRIX_HOMESERVER = self._get_str("MATRIX_HOMESERVER", "matrix", "homeserver") or stored.get("homeserver")
-        self.MATRIX_USER_ID = self._get_str("MATRIX_USER_ID", "matrix", "user_id") or stored.get("user_id")
+        stored_str = {k: v for k, v in stored.items() if isinstance(v, str)}
+        self.MATRIX_HOMESERVER = self._get_str("MATRIX_HOMESERVER", "matrix", "homeserver") or stored_str.get("homeserver")
+        self.MATRIX_USER_ID = self._get_str("MATRIX_USER_ID", "matrix", "user_id") or stored_str.get("user_id")
         self.MATRIX_ACCESS_TOKEN = (self._get_str("MATRIX_ACCESS_TOKEN", "matrix", "access_token")
-                                    or stored.get("access_token"))
+                                    or stored_str.get("access_token"))
 
         self.BOT_NAME = self._get_str("BOT_NAME", "bot", "name", default=self.DEFAULTS["bot.name"])
         # Default language of chat messages; `<prefix> lang` overrides it per room.
@@ -119,6 +120,11 @@ class Config:
         self.AUTO_ACCEPT_INVITES_FROM: list[str] = self._get_str_list(
             "AUTO_ACCEPT_INVITES_FROM", "bot", "auto_accept_invites_from"
         )
+        if not self.AUTO_ACCEPT_INVITES_FROM and self._toml_get("bot", "auto_accept_invites_from") is None \
+                and "AUTO_ACCEPT_INVITES_FROM" not in os.environ:
+            # Asked by scripts/setup.py; the config or env override it.
+            owners = stored.get("owners")
+            self.AUTO_ACCEPT_INVITES_FROM = [str(o) for o in owners] if isinstance(owners, list) else []
         self.COMMAND_PREFIX = (
             self._get_str("COMMAND_PREFIX", "bot", "command_prefix", default=self.DEFAULTS["bot.command_prefix"])
             or self.DEFAULTS["bot.command_prefix"]

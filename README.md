@@ -282,7 +282,7 @@ Back up while the bot is stopped: `crypto_store/` is an SQLite database, a copy 
 
 The bot runs from the prebuilt image `ghcr.io/oolaapleur/matrix-element-call-musicbot`, published by CI for every change; the clone is only for `docker-compose.yml` and the example config.
 
-`scripts/setup.py` asks for the bot's user ID and password and does the whole account setup in one run: logs the bot in (the login is kept in the data volume, the config holds no secrets), restores its cross-signing keys if the account has them (asks for the recovery key, see [Cross-Signing](#cross-signing-and-user-verification)) and creates the call worker's device for encrypted call audio. Run it again if a step failed: done steps are skipped.
+`scripts/setup.py` asks for the bot's user ID and password, and for your own user ID (the bot joins rooms you invite it to; Enter to skip, more users in `[bot] auto_accept_invites_from`), and does the whole account setup in one run: logs the bot in (the login is kept in the data volume, the config holds no secrets), restores its cross-signing keys if the account has them (asks for the recovery key, see [Cross-Signing](#cross-signing-and-user-verification)) and creates the call worker's device for encrypted call audio. Run it again if a step failed: done steps are skipped.
 
 ### Linux
 

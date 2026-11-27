@@ -4,11 +4,13 @@
 1. Logs the bot in with its password (that login is the bot's device) and
    saves the login in data/credentials.json (mode 600). The config needs no
    secrets.
-2. Cross-signing: if the account already has keys in secret storage (set up
+2. Asks for your Matrix user ID: the bot accepts room invites from it
+   (Enter to skip; more users go into [bot] auto_accept_invites_from).
+3. Cross-signing: if the account already has keys in secret storage (set up
    in Element with "Set up recovery"), asks for the recovery key and restores
    them, so the bot signs its device on first start. A fresh account has
    nothing to restore; the bot creates its keys on first start.
-3. Creates the call worker's own device for encrypted call audio.
+4. Creates the call worker's own device for encrypted call audio.
 
 Safe to run again: done steps are skipped, so a failed step can be retried.
 
@@ -77,21 +79,41 @@ def step_login(password):
         sys.exit(f"Can't reach {homeserver}: {exc}")
     login = {"homeserver": homeserver, "user_id": resp["user_id"],
              "device_id": resp["device_id"], "access_token": resp["access_token"]}
-    _matrix.bot_config.save_credentials(login)
+    stored = _matrix.bot_config.load_credentials()
+    stored.update(login)
+    _matrix.bot_config.save_credentials(stored)
     print(f"1. Login: done, device {resp['device_id']}, saved in data/credentials.json.")
     return login
 
 
+def step_owner():
+    stored = _matrix.bot_config.load_credentials()
+    if "owners" in stored:
+        print(f"2. Room invites: accepted from {', '.join(stored['owners']) or 'nobody (skipped)'}.")
+        return
+    owner = input("Your Matrix user ID; the bot joins rooms you invite it to "
+                  "(Enter to skip; more users: [bot] auto_accept_invites_from in the config): ").strip()
+    if owner and (not owner.startswith("@") or ":" not in owner):
+        sys.exit(f"A full user ID is needed: @name:server (got {owner!r})")
+    stored["owners"] = [owner] if owner else []
+    _matrix.bot_config.save_credentials(stored)
+    if owner:
+        print(f"2. Room invites: accepted from {owner}.")
+    else:
+        print("2. Room invites: skipped. The bot then joins no room by itself: set [bot] "
+              "auto_accept_invites_from (or auto_accept_invites = true) in the config.")
+
+
 def step_cross_signing(login):
     if (_matrix.DATA / "cross_signing_keys.json").exists():
-        print("2. Cross-signing keys: already there.")
+        print("3. Cross-signing keys: already there.")
         return True
     try:
         from matrix_bot_common import restore_keys
     except ImportError as exc:
-        print(f"2. Cross-signing keys: matrix_bot_common is missing ({exc}); install requirements.txt.")
+        print(f"3. Cross-signing keys: matrix_bot_common is missing ({exc}); install requirements.txt.")
         return False
-    print("2. Cross-signing keys: checking the account's secret storage...")
+    print("3. Cross-signing keys: checking the account's secret storage...")
     ask_key = lambda: getpass.getpass(  # noqa: E731
         "Recovery key from Element (not shown; Enter to skip): ")
     while True:
@@ -117,10 +139,10 @@ def step_cross_signing(login):
 
 def step_worker(login, password):
     if create_worker_device.DEVICE_FILE.exists():
-        print("3. Call worker device: already there.")
+        print("4. Call worker device: already there.")
         return
     device_id = create_worker_device.create(login["homeserver"], login["user_id"], password())
-    print(f"3. Call worker device: done, device {device_id}.")
+    print(f"4. Call worker device: done, device {device_id}.")
 
 
 def main():
@@ -129,6 +151,7 @@ def main():
         sys.exit(f"The bot seems to be running (pid {', '.join(map(str, running))}); stop it first.")
     password = Password()
     login = step_login(password)
+    step_owner()
     keys_ok = step_cross_signing(login)
     step_worker(login, password)
     if not keys_ok:
