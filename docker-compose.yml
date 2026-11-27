@@ -10,7 +10,7 @@ services:
     environment:
       - CONFIG_FILE=/app/config/config.toml
     volumes:
-      - ./config:/app/config:ro
+      - ./config:/app/config:ro,Z   # Z: SELinux label (Fedora/RHEL); ignored elsewhere
       - musicbot_logs:/app/logs
       - musicbot_data:/app/data
       - musicbot_cache:/app/cache
