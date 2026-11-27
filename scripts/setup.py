@@ -28,10 +28,19 @@ import _matrix
 import create_worker_device
 
 BOT_DEVICE_NAME = "musicbot"
+INDENT = "   "
+
+
+def say(text):
+    print(INDENT + text)
+
+
+def done(text):
+    print(INDENT + "✓ " + text)
 
 
 def ask(prompt):
-    value = input(prompt).strip()
+    value = input(INDENT + prompt).strip()
     if not value:
         sys.exit("Cancelled")
     return value
@@ -45,30 +54,31 @@ class Password:
 
     def __call__(self):
         if self.value is None:
-            self.value = getpass.getpass("Bot's password (not shown): ")
+            self.value = getpass.getpass(INDENT + "Bot's password (not shown): ")
         return self.value
 
 
 def step_login(password):
+    print("1. Login")
     login = _matrix.bot_login()
     if login.get("homeserver") and login.get("user_id") and login.get("access_token"):
         try:
             _matrix.request("GET", f"{login['homeserver']}/_matrix/client/v3/account/whoami",
                             token=login["access_token"])
-            print(f"1. Login: already done ({login['user_id']}"
-                  f"{', device ' + login['device_id'] if login.get('device_id') else ''}).")
+            done(f"Already done: {login['user_id']}"
+                 f"{', device ' + login['device_id'] if login.get('device_id') else ''}")
             return login
         except _matrix.MatrixError as exc:
             if exc.status != 401:
                 sys.exit(f"Checking the saved login failed: {exc}")
-            print("1. Login: the saved token no longer works (device logged out?), logging in again.")
+            say("The saved token no longer works (device logged out?), logging in again.")
         except OSError as exc:
             sys.exit(f"Can't reach {login['homeserver']}: {exc}")
     user_id = login.get("user_id") or ask("Bot's Matrix user ID (e.g. @musicbot:matrix.org): ")
     if not user_id.startswith("@") or ":" not in user_id:
         sys.exit("A full user ID is needed: @name:server")
     homeserver = login.get("homeserver") or _matrix.discover_homeserver(user_id.split(":", 1)[1])
-    print(f"Homeserver: {homeserver}")
+    say(f"Homeserver: {homeserver}")
     try:
         if not _matrix.password_login_allowed(homeserver):
             sys.exit("This homeserver doesn't allow password login for bots (no m.login.password).")
@@ -82,67 +92,70 @@ def step_login(password):
     stored = _matrix.bot_config.load_credentials()
     stored.update(login)
     _matrix.bot_config.save_credentials(stored)
-    print(f"1. Login: done, device {resp['device_id']}, saved in data/credentials.json.")
+    done(f"Device {resp['device_id']}, saved in data/credentials.json")
     return login
 
 
 def step_owner():
+    print("2. Room invites")
     stored = _matrix.bot_config.load_credentials()
     if "owners" in stored:
-        print(f"2. Room invites: accepted from {', '.join(stored['owners']) or 'nobody (skipped)'}.")
+        done(f"Already done: accepted from {', '.join(stored['owners']) or 'nobody (skipped)'}")
         return
-    owner = input("Your Matrix user ID; the bot joins rooms you invite it to "
+    owner = input(INDENT + "Your Matrix user ID; the bot joins rooms you invite it to "
                   "(Enter to skip; more users: [bot] auto_accept_invites_from in the config): ").strip()
     if owner and (not owner.startswith("@") or ":" not in owner):
         sys.exit(f"A full user ID is needed: @name:server (got {owner!r})")
     stored["owners"] = [owner] if owner else []
     _matrix.bot_config.save_credentials(stored)
     if owner:
-        print(f"2. Room invites: accepted from {owner}.")
+        done(f"Accepted from {owner}")
     else:
-        print("2. Room invites: skipped. The bot then joins no room by itself: set [bot] "
-              "auto_accept_invites_from (or auto_accept_invites = true) in the config.")
+        done("Skipped: the bot joins no room by itself; set [bot] auto_accept_invites_from "
+             "(or auto_accept_invites = true) in the config")
 
 
 def step_cross_signing(login):
+    print("3. Cross-signing keys")
     if (_matrix.DATA / "cross_signing_keys.json").exists():
-        print("3. Cross-signing keys: already there.")
+        done("Already there")
         return True
     try:
         from matrix_bot_common import restore_keys
     except ImportError as exc:
-        print(f"3. Cross-signing keys: matrix_bot_common is missing ({exc}); install requirements.txt.")
+        say(f"matrix_bot_common is missing ({exc}); install requirements.txt.")
         return False
-    print("3. Cross-signing keys: checking the account's secret storage...")
-    ask_key = lambda: getpass.getpass(  # noqa: E731
-        "Recovery key from Element (not shown; Enter to skip): ")
+    ask_key = lambda: getpass.getpass(INDENT + "Recovery key from Element (not shown; Enter to skip): ")  # noqa: E731
     while True:
         try:
-            result = restore_keys.restore(login["homeserver"], login["access_token"], _matrix.DATA, ask_key)
+            result = restore_keys.restore(login["homeserver"], login["access_token"], _matrix.DATA,
+                                          ask_key, out=lambda *_: None)
             break
         except restore_keys.Abort as exc:
-            print(f"   {exc}")
+            say(str(exc))
             if "recovery key" not in str(exc).lower():
                 return False
     if result == "restored":
-        print("   Restored: the bot signs its device on first start.")
+        say("master, self-signing, user-signing: match the server")
+        done("Restored: the bot signs its device on first start")
     elif result == "fresh":
-        print("   The account has no keys yet: the bot creates them on first start.")
+        done("The account has no keys yet: the bot creates them on first start")
     elif result == "no_secret_storage":
-        print("   The account has keys but no recovery set up, so they can't be restored. The bot will run "
-              "with an unsigned device; to fix it, replace the keys (README, Cross-Signing).")
+        done("The account has keys but no recovery set up, so they can't be restored. The bot runs "
+             "with an unsigned device until you replace them (README, Cross-Signing)")
     else:
-        print("   Skipped. Without the keys the bot can't sign its device; see the README "
-              "(Cross-Signing) to restore them later or to replace them.")
+        done("Skipped: the bot can't sign its device without the keys; restore or replace them later "
+             "(README, Cross-Signing)")
     return True
 
 
 def step_worker(login, password):
+    print("4. Call worker device")
     if create_worker_device.DEVICE_FILE.exists():
-        print("4. Call worker device: already there.")
+        done("Already there")
         return
     device_id = create_worker_device.create(login["homeserver"], login["user_id"], password())
-    print(f"4. Call worker device: done, device {device_id}.")
+    done(f"Device {device_id}")
 
 
 def main():
@@ -156,7 +169,7 @@ def main():
     step_worker(login, password)
     if not keys_ok:
         sys.exit("\nSetup isn't complete: fix the problem above and run scripts/setup.py again.")
-    print("\nSetup done. Start the bot: `docker compose up -d` (or `python3 main.py`).")
+    print("\nSetup done. Start the bot: docker compose up -d (or python3 main.py)")
 
 
 if __name__ == "__main__":
