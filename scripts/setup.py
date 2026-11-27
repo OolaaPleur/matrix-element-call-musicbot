@@ -104,8 +104,11 @@ def step_cross_signing(login):
                 return False
     if result == "restored":
         print("   Restored: the bot signs its device on first start.")
-    elif result == "no_secret_storage":
+    elif result == "fresh":
         print("   The account has no keys yet: the bot creates them on first start.")
+    elif result == "no_secret_storage":
+        print("   The account has keys but no recovery set up, so they can't be restored. The bot will run "
+              "with an unsigned device; to fix it, replace the keys (README, Cross-Signing).")
     else:
         print("   Skipped. Without the keys the bot can't sign its device; see the README "
               "(Cross-Signing) to restore them later or to replace them.")
