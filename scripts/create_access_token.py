@@ -8,11 +8,11 @@ mode 600). If there is no config or it can't be written (read-only in the
 container), prints the lines to paste instead. Only the Python standard
 library is needed, so it runs on the host before anything else is installed:
 
-    python3 scripts/get_access_token.py
+    python3 scripts/create_access_token.py
 
 or inside the image (no Python on the host, e.g. Windows):
 
-    docker compose run --rm musicbot python3 scripts/get_access_token.py
+    docker compose run --rm musicbot python3 scripts/create_access_token.py
 
 Don't use the token Element shows (Settings > Help & About): it belongs to
 that Element session, and on homeservers with OAuth login (matrix.org) it
