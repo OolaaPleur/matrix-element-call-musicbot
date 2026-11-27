@@ -136,12 +136,16 @@ docker compose exec musicbot python3 -m matrix_bot_common.restore_keys   # Docke
 
 **No recovery key?** The bot can replace the account's keys, but only when asked to: start it once with `CROSS_SIGNING_ALLOW_RESET=1` (Docker: add it under `environment:` in `docker-compose.yml`, remove it afterwards). On homeservers with OAuth login (matrix.org) the log then shows a link: open it, log in as the bot, approve the reset, and restart the bot. Everyone who verified the bot has to verify it again.
 
-### Verifying the bot (optional)
+### Verifying the bot (recommended)
 
-Verification only adds the green shield: it confirms to you that this bot is yours. From your own account in Element, open the bot's profile → **Verify**:
+Verification adds the green shield: it confirms to you that this bot is really yours. It takes a minute, by comparing emoji:
 
-- If the bot's account is still logged in to Element somewhere (e.g. the browser session you created it in), accept the request there and compare the emoji.
-- Otherwise compare the keys by hand: print the bot's master key with `python3 scripts/show_cross_signing_fingerprint.py` (Docker: `docker compose exec musicbot python3 scripts/show_cross_signing_fingerprint.py`) and compare it with the one Element shows (**Verify manually**, where your Element version offers it). `--check-server` also checks that the local key matches the one on the server.
+1. Log in to Element as the bot in a separate browser or a private window (e.g. [app.element.io](https://app.element.io)); skip this if the bot's account is still logged in from when you created it. If Element asks to verify that session, use the recovery key; **never choose "Reset"**, that would replace the keys the bot uses.
+2. In your own Element, open the bot's profile → **Verify**.
+3. Accept the request in the bot's session and check that both sides show the same emoji.
+4. Done. You can log the bot's Element session out afterwards; the bot itself is not affected.
+
+Without Element access to the bot's account, compare keys instead: `python3 scripts/show_cross_signing_fingerprint.py` (Docker: `docker compose exec musicbot python3 scripts/show_cross_signing_fingerprint.py`) prints the bot's master key to compare with the one Element shows (**Verify manually**, where your Element version offers it).
 
 ## Troubleshooting
 
