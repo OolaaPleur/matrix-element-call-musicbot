@@ -277,6 +277,8 @@ Back up while the bot is stopped: `crypto_store/` is an SQLite database, a copy 
 
 The bot runs from the prebuilt image `ghcr.io/oolaapleur/matrix-element-call-musicbot`, published by CI for every change; the clone is only for `docker-compose.yml` and the example config.
 
+`scripts/get_access_token.py` asks for the bot's user ID and password and logs it in once (that login is the bot's device). Don't use the token Element shows in its settings: it belongs to that Element session and, on matrix.org, expires within minutes.
+
 ### Linux
 
 ```bash
@@ -284,7 +286,8 @@ git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
 cd matrix-element-call-musicbot
 
 cp config/config.example.toml config/config.toml
-nano config/config.toml          # set homeserver, user_id, access_token
+python3 scripts/get_access_token.py   # logs the bot in, prints homeserver, user_id, access_token
+nano config/config.toml          # paste those three lines into [matrix]
 
 # The bot runs as uid 10001 in the container and the config holds the token:
 chmod 600 config/config.toml
@@ -312,7 +315,8 @@ git clone https://github.com/OolaaPleur/matrix-element-call-musicbot
 Set-Location .\matrix-element-call-musicbot
 
 Copy-Item .\config\config.example.toml .\config\config.toml
-notepad .\config\config.toml     # set homeserver, user_id, access_token
+docker compose run --rm musicbot python3 scripts/get_access_token.py   # prints homeserver, user_id, access_token
+notepad .\config\config.toml     # paste those three lines into [matrix]
 
 docker compose up -d
 docker compose logs -f
@@ -344,7 +348,8 @@ bun install --cwd call_worker --frozen-lockfile
 python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE, see "Call audio E2EE"
 
 cp config/config.example.toml config.toml
-# Edit config.toml
+python3 scripts/get_access_token.py   # logs the bot in, prints homeserver, user_id, access_token
+nano config.toml                      # paste those three lines into [matrix]
 
 python3 main.py
 ```
