@@ -67,6 +67,14 @@ docker compose pull
 docker compose up -d
 ```
 
+To change setup's answers later (another bot account, who may invite it, the cross-signing keys, the call worker device), stop the bot and run setup again: when everything is set up, it asks what to change.
+
+```bash
+docker compose stop
+docker compose run --rm musicbot python3 scripts/setup.py
+docker compose up -d
+```
+
 ### Windows (PowerShell)
 
 > [!WARNING]

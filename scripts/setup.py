@@ -13,16 +13,19 @@
 4. Creates the call worker's own device for encrypted call audio.
 
 Safe to run again: done steps are skipped, so a failed step can be retried.
+When everything is done, it offers to change the answers: another bot
+account, other users for room invites, the cross-signing keys restored again,
+a new call worker device. Stop the bot first.
 
     docker compose run --rm musicbot python3 scripts/setup.py
     python3 scripts/setup.py            # raw install, in the bot's venv
 
-Later changes have their own scripts: rotate_access_token.py (new token, same
-device), create_worker_device.py --replace, and
-`python3 -m matrix_bot_common.restore_keys`.
+A new token for the same device: rotate_access_token.py.
 """
+import datetime
 import getpass
 import sys
+import tomllib
 
 import _matrix
 import create_worker_device
@@ -35,8 +38,53 @@ def say(text):
     print(INDENT + text)
 
 
+WORKED = False  # set when a step did something on this run
+
+
 def done(text):
+    global WORKED
+    WORKED = True
     print(INDENT + "✓ " + text)
+
+
+def already(text):
+    print(INDENT + "✓ " + text)
+
+
+def yes(prompt):
+    return input(INDENT + prompt + " [y/N]: ").strip().lower() in ("y", "yes")
+
+
+def user_ids(text):
+    ids = [part for part in text.replace(",", " ").split() if part]
+    for value in ids:
+        if not value.startswith("@") or ":" not in value:
+            sys.exit(f"A full user ID is needed: @name:server (got {value!r})")
+    return ids
+
+
+def config_overrides(section, keys):
+    """Keys of the config's [section] that override what setup stores."""
+    path = _matrix.config_path()
+    if not path:
+        return []
+    table = tomllib.loads(path.read_text(encoding="utf-8")).get(section, {})
+    return [key for key in keys if key in table and (table[key] or isinstance(table[key], list))]
+
+
+# What belongs to the bot's account, moved aside when it changes.
+ACCOUNT_FILES = ["crypto_store", "device_id", "cross_signing_keys.json", "cross_signing_keys.json.stale-*",
+                 "worker_device.json", "worker_crypto_store.v8*"]
+
+
+def move_account_files():
+    target = _matrix.DATA / f"previous-account-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    moved = [path for pattern in ACCOUNT_FILES for path in _matrix.DATA.glob(pattern)]
+    if moved:
+        target.mkdir()
+        for path in moved:
+            path.rename(target / path.name)
+        say(f"The old account's keys and devices are in data/{target.name}/")
 
 
 def ask(prompt):
@@ -58,16 +106,35 @@ class Password:
         return self.value
 
 
-def step_login(password):
+def step_login(password, change=False):
     print("1. Login")
     login = _matrix.bot_login()
     if login.get("homeserver") and login.get("user_id") and login.get("access_token"):
         try:
             _matrix.request("GET", f"{login['homeserver']}/_matrix/client/v3/account/whoami",
                             token=login["access_token"])
-            done(f"Already done: {login['user_id']}"
-                 f"{', device ' + login['device_id'] if login.get('device_id') else ''}")
-            return login
+            already(f"{'Now' if change else 'Already done'}: {login['user_id']}"
+                    f"{', device ' + login['device_id'] if login.get('device_id') else ''}")
+            if not change:
+                return login
+            overridden = config_overrides("matrix", ["homeserver", "user_id", "access_token"])
+            if overridden:
+                say(f"[matrix] {', '.join(overridden)} in the config override this; change it there.")
+                return login
+            new_id = input(INDENT + "Enter to keep, or another account's user ID: ").strip()
+            if not new_id or new_id == login["user_id"]:
+                return login
+            user_ids(new_id)
+            say("The bot's keys and devices belong to its account: they are moved aside, and the next")
+            say("steps set up the new account. Rooms, saved queues and languages stay.")
+            if not yes(f"Switch the bot to {new_id}?"):
+                return login
+            move_account_files()
+            stored = _matrix.bot_config.load_credentials()
+            for key in ("homeserver", "user_id", "device_id", "access_token"):
+                stored.pop(key, None)
+            _matrix.bot_config.save_credentials(stored)
+            login = {"user_id": new_id}
         except _matrix.MatrixError as exc:
             if exc.status != 401:
                 sys.exit(f"Checking the saved login failed: {exc}")
@@ -96,11 +163,23 @@ def step_login(password):
     return login
 
 
-def step_owner():
+def step_owner(change=False):
     print("2. Room invites")
     stored = _matrix.bot_config.load_credentials()
     if "owners" in stored:
-        done(f"Already done: accepted from {', '.join(stored['owners']) or 'nobody (skipped)'}")
+        already(f"{'Now' if change else 'Already done'}: accepted from "
+                f"{', '.join(stored['owners']) or 'nobody (skipped)'}")
+        if not change:
+            return
+        if config_overrides("bot", ["auto_accept_invites_from"]):
+            say("[bot] auto_accept_invites_from in the config overrides this; change it there.")
+            return
+        answer = input(INDENT + "Enter to keep, - for nobody, or user IDs (space-separated): ").strip()
+        if not answer:
+            return
+        stored["owners"] = [] if answer == "-" else user_ids(answer)
+        _matrix.bot_config.save_credentials(stored)
+        done(f"Accepted from {', '.join(stored['owners']) or 'nobody'}")
         return
     owner = input(INDENT + "Your Matrix user ID; the bot joins rooms you invite it to "
                   "(Enter to skip; more users: [bot] auto_accept_invites_from in the config): ").strip()
@@ -115,11 +194,12 @@ def step_owner():
              "(or auto_accept_invites = true) in the config")
 
 
-def step_cross_signing(login):
+def step_cross_signing(login, change=False):
     print("3. Cross-signing keys")
     if (_matrix.DATA / "cross_signing_keys.json").exists():
-        done("Already there")
-        return True
+        already("Already there")
+        if not change or not yes("Restore them again with the recovery key (e.g. after a reset in Element)?"):
+            return True
     try:
         from matrix_bot_common import restore_keys
     except ImportError as exc:
@@ -141,20 +221,23 @@ def step_cross_signing(login):
     elif result == "fresh":
         done("The account has no keys yet: the bot creates them on first start")
     elif result == "no_secret_storage":
-        done("The account has keys but no recovery set up, so they can't be restored. The bot runs "
+        already("The account has keys but no recovery set up, so they can't be restored. The bot runs "
              "with an unsigned device until you replace them (README, Cross-Signing)")
     else:
-        done("Skipped: the bot can't sign its device without the keys; restore or replace them later "
+        already("Skipped: the bot can't sign its device without the keys; restore or replace them later "
              "(README, Cross-Signing)")
     return True
 
 
-def step_worker(login, password):
+def step_worker(login, password, change=False):
     print("4. Call worker device")
+    replace = False
     if create_worker_device.DEVICE_FILE.exists():
-        done("Already there")
-        return
-    device_id = create_worker_device.create(login["homeserver"], login["user_id"], password())
+        already("Already there")
+        if not change or not yes("Replace it with a new device (logs the old one out)?"):
+            return
+        replace = True
+    device_id = create_worker_device.create(login["homeserver"], login["user_id"], password(), replace)
     done(f"Device {device_id}")
 
 
@@ -163,13 +246,23 @@ def main():
     if running:
         sys.exit(f"The bot seems to be running (pid {', '.join(map(str, running))}); stop it first.")
     password = Password()
-    login = step_login(password)
-    step_owner()
-    keys_ok = step_cross_signing(login)
-    step_worker(login, password)
-    if not keys_ok:
-        sys.exit("\nSetup isn't complete: fix the problem above and run scripts/setup.py again.")
-    print("\nSetup done. Start the bot: docker compose up -d (or python3 main.py)")
+    change = False
+    while True:
+        login = step_login(password, change)
+        step_owner(change)
+        keys_ok = step_cross_signing(login, change)
+        step_worker(login, password, change)
+        if not keys_ok:
+            sys.exit("\nSetup isn't complete: fix the problem above and run scripts/setup.py again.")
+        if WORKED or change:
+            break
+        print("\nEverything is set up.")
+        if not yes("Change something?"):
+            return
+        print()
+        change = True
+    print("\nSetup done. Start the bot: docker compose up -d (or python3 main.py)"
+          if not change else "\nDone. Start the bot again: docker compose up -d (or python3 main.py)")
 
 
 if __name__ == "__main__":

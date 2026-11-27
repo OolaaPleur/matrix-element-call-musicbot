@@ -30,6 +30,8 @@ python3 main.py
 > [!NOTE]
 > `requirements.txt` references `../matrix-element-call-common` (the shared library). Both repos must be cloned into the same parent directory.
 
+To change setup's answers later, stop the bot and run `python3 scripts/setup.py` again: when everything is set up, it asks what to change.
+
 ## systemd user service
 
 To keep it running, `~/.config/systemd/user/matrix-musicbot.service` (the name `rotate_access_token.py --restart` restarts):
