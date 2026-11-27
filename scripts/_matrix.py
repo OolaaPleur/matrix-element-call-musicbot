@@ -2,7 +2,6 @@
 import json
 import os
 import sys
-import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -78,13 +77,8 @@ def config_path():
 
 
 def bot_login():
-    """homeserver, user_id, access_token, device_id of the bot: [matrix] in the
-    config overrides data/credentials.json (same order as the bot)."""
+    """homeserver, user_id, access_token, device_id of the bot, from data/credentials.json."""
     result = dict(bot_config.load_credentials())
-    path = config_path()
-    if path:
-        matrix = tomllib.loads(path.read_text(encoding="utf-8")).get("matrix", {})
-        result.update({k: v for k, v in matrix.items() if isinstance(v, str) and v})
     if "homeserver" in result:
         result["homeserver"] = result["homeserver"].rstrip("/")
     return result

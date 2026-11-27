@@ -30,7 +30,7 @@ def _load_keys() -> dict:
 
 
 def _read_config() -> tuple[str, str, str]:
-    """Return (homeserver, user_id, access_token): data/credentials.json, or [matrix] in the config."""
+    """Return (homeserver, user_id, access_token) from data/credentials.json."""
     try:
         login = _matrix.bot_login()
     except Exception as e:

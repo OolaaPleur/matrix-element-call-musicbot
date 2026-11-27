@@ -89,18 +89,14 @@ class Config:
     }
 
     def __init__(self):
-        self._load_dotenv_file()
         self.config_file = Path(os.environ.get("CONFIG_FILE", "config.toml"))
         self._toml = self._load_toml_file(self.config_file)
 
-        # The login normally comes from data/credentials.json (scripts/setup.py);
-        # env vars or [matrix] in the config override it.
+        # The login comes from data/credentials.json (scripts/setup.py) only.
         stored = load_credentials()
-        stored_str = {k: v for k, v in stored.items() if isinstance(v, str)}
-        self.MATRIX_HOMESERVER = self._get_str("MATRIX_HOMESERVER", "matrix", "homeserver") or stored_str.get("homeserver")
-        self.MATRIX_USER_ID = self._get_str("MATRIX_USER_ID", "matrix", "user_id") or stored_str.get("user_id")
-        self.MATRIX_ACCESS_TOKEN = (self._get_str("MATRIX_ACCESS_TOKEN", "matrix", "access_token")
-                                    or stored_str.get("access_token"))
+        self.MATRIX_HOMESERVER = str(stored.get("homeserver") or "").rstrip("/") or None
+        self.MATRIX_USER_ID = stored.get("user_id") or None
+        self.MATRIX_ACCESS_TOKEN = stored.get("access_token") or None
 
         self.BOT_NAME = self._get_str("BOT_NAME", "bot", "name", default=self.DEFAULTS["bot.name"])
         # Default language of chat messages; `<prefix> lang` overrides it per room.
@@ -364,17 +360,17 @@ class Config:
         missing = [
             key
             for key, value in [
-                ("matrix.homeserver", self.MATRIX_HOMESERVER),
-                ("matrix.user_id", self.MATRIX_USER_ID),
-                ("matrix.access_token", self.MATRIX_ACCESS_TOKEN),
+                ("homeserver", self.MATRIX_HOMESERVER),
+                ("user_id", self.MATRIX_USER_ID),
+                ("access_token", self.MATRIX_ACCESS_TOKEN),
             ]
             if not value
         ]
         if missing:
             raise ValueError(
-                "Missing required configuration values: "
+                "Missing in data/credentials.json: "
                 + ", ".join(missing)
-                + ". Run scripts/setup.py first (see the README), or set them in [matrix] of the config."
+                + ". Run scripts/setup.py first (see the README)."
             )
 
     @staticmethod
@@ -460,32 +456,6 @@ class Config:
         if isinstance(from_toml, list):
             return [str(s) for s in from_toml if str(s).strip()]
         return [s.strip() for s in str(from_toml).split(",") if s.strip()]
-
-    @staticmethod
-    def _load_dotenv_file():
-        """Load key=value pairs from local .env into os.environ if unset."""
-        dotenv_path = Path(".env")
-        if not dotenv_path.exists():
-            return
-
-        for line in dotenv_path.read_text(encoding="utf-8").splitlines():
-            raw = line.strip()
-            if not raw or raw.startswith("#") or "=" not in raw:
-                continue
-
-            key, value = raw.split("=", 1)
-            key = key.strip()
-            value = value.strip()
-            if not key:
-                continue
-
-            if (
-                (value.startswith('"') and value.endswith('"'))
-                or (value.startswith("'") and value.endswith("'"))
-            ):
-                value = value[1:-1]
-
-            os.environ.setdefault(key, value)
 
     @classmethod
     def defaults_text(cls) -> str:
