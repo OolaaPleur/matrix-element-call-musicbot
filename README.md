@@ -8,6 +8,18 @@ Related projects:
 - [matrix-element-call-scrobbler](https://github.com/OolaaPleur/matrix-element-call-scrobbler) — scrobbles what this bot plays to Last.fm for everyone in the call
 - [matrix-element-call-common](https://github.com/OolaaPleur/matrix-element-call-common) — shared cross-signing code
 
+## Contents
+
+- [Features](#features)
+- [Install with Docker](#docker) · [without Docker](#run-without-docker-raw)
+- [Commands](#commands)
+- Configuration: [highlights](#configuration-highlights) · [command prefix](#configurable-command-prefix) · [invites](#invite-security) · [languages](#languages)
+- [Companion scrobbler bot](#companion-scrobbler-bot)
+- Encryption: [E2EE](#e2ee) · [cross-signing and verification](#cross-signing-and-user-verification)
+- [Troubleshooting](#troubleshooting)
+- [Data and backups](#data-and-backups)
+- [Demo](#demo) · [Current limitations](#current-limitations) · [Attribution](#attribution)
+
 ## Features
 
 - Discord-style chat command workflow in Matrix rooms
@@ -294,6 +306,7 @@ cd matrix-element-call-musicbot
 
 cp config/config.example.toml config/config.toml
 nano config/config.toml          # settings (optional, the defaults work)
+                                 # e.g. [bot] scrobbler_events = true for the companion scrobbler
 
 docker compose run --rm musicbot python3 scripts/setup.py   # login, cross-signing keys, call worker device
 docker compose up -d             # start the bot
@@ -319,6 +332,7 @@ Set-Location .\matrix-element-call-musicbot
 
 Copy-Item .\config\config.example.toml .\config\config.toml
 notepad .\config\config.toml     # settings (optional, the defaults work)
+                                 # e.g. [bot] scrobbler_events = true for the companion scrobbler
 
 docker compose run --rm musicbot python3 scripts/setup.py
 docker compose up -d
@@ -352,6 +366,7 @@ python3 call_worker/patches/apply-pr768.py   # rtc-node fix for call audio E2EE,
 
 cp config/config.example.toml config.toml
 nano config.toml                      # settings (optional, the defaults work)
+                                      # e.g. [bot] scrobbler_events = true for the companion scrobbler
 python3 scripts/setup.py              # login, cross-signing keys, call worker device (see "Docker")
 
 python3 main.py
