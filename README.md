@@ -3,7 +3,7 @@
 Discord-style music bot for Matrix: chat commands (`!m play`, `!m queue`, `!m skip`, …) plus real playback in Element Call.
 
 <p align="center">
-  <img src="assets/play.gif" width="700"/>
+  <img src="assets/play.gif" width="860"/>
 </p>
 
 Originally based on [SultanAlburaq/matrix-element-call-musicbot](https://github.com/SultanAlburaq/matrix-element-call-musicbot); this version adds room and call audio E2EE, cross-signing, search, translations, scrobbler events, an updated call worker and more.
@@ -125,7 +125,7 @@ Updating and changing setup's answers work with the same commands as on Linux.
 All commands start with the prefix (`!m` by default); the short form is in brackets, e.g. `!m p` = `!m play`.
 
 <p align="center">
-  <img src="assets/commands.gif" width="700"/>
+  <img src="assets/commands.gif" width="860"/>
 </p>
 
 ### Playback
@@ -148,10 +148,6 @@ All commands start with the prefix (`!m` by default); the short form is in brack
 - `!m history` (`hist`) — show recent playback history
 
 ### Saved Queues
-
-<p align="center">
-  <img src="assets/customplaylists.gif" width="700"/>
-</p>
 
 - `!m save` (`sv`) `<name> [--force]` — save current+upcoming queue
 - `!m load` (`ld`) `<name>` — load a saved queue
