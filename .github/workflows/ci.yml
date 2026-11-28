@@ -52,6 +52,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write       # signing certificate for the attestation
+      attestations: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,6 +84,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Build and push Docker images
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -91,3 +94,14 @@ jobs:
             ghcr.io/${{ steps.repo.outputs.name }}:latest
             ghcr.io/${{ steps.repo.outputs.name }}:${{ steps.get_tag.outputs.version }}
             ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
+
+      # Signed build provenance: which workflow, repo and commit built the image.
+      # Check it with: gh attestation verify oci://ghcr.io/<image>:latest -R <owner>/<repo>
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/${{ steps.repo.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false   # storage records are for organization repos only
