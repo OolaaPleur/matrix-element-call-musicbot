@@ -698,6 +698,7 @@ class IntegratedBot:
             ),
             f"Progress messages: {'On' if self.config.SHOW_PROGRESS_MESSAGES else 'Off'}",
             f"Quiet mode: {'On' if self.config.QUIET_MODE else 'Off'}",
+            f"Log level: {self.config.LOG_LEVEL}",
             f"Log file: {self.config.LOG_FILE}",
             f"Clean log: {self.config.CLEAN_LOG_FILE if self.config.CLEAN_LOG_ENABLED else 'Off'}",
         ]

@@ -60,6 +60,8 @@ docker compose up -d             # start the bot
 docker compose logs -f           # watch it start (Ctrl+C to stop watching)
 ```
 
+Podman works too: use `podman compose` instead of `docker compose` (it needs `podman-compose` or `docker-compose` installed).
+
 Then invite the bot to a room and type `!m help`.
 
 Update to the latest version:
@@ -197,6 +199,7 @@ Every setting is listed with its default in [`config/config.example.toml`](confi
 | `bot.scrobbler_events` | `false` | Track events for the [scrobbler bot](#companion-scrobbler-bot) |
 | `audio.volume_percent` | `100` | Start volume, 0–200 (logarithmic up to 100) |
 | `audio.ytdlp_cookies_file` | unset | Cookies for yt-dlp when YouTube asks to sign in (see [Troubleshooting](#troubleshooting)) |
+| `logging.level` | `"INFO"` | `DEBUG` for troubleshooting; the `LOG_LEVEL` environment variable overrides it |
 | `worker.e2ee` | `"auto"` | Call audio encryption: `auto` = on once the worker device exists, `true` = on and complain in the room if it can't be, `false` = off ([details](docs/e2ee.md#call-audio-e2ee)) |
 
 ### Languages

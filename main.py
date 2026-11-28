@@ -59,7 +59,7 @@ def setup_logging(config: Config):
         clean_file_handler.addFilter(CleanLogNoiseFilter(config.CLEAN_LOG_FILTER_MATRIXRTC_NOISE))
 
     root = logging.getLogger()
-    root.setLevel(logging.INFO)
+    root.setLevel(config.LOG_LEVEL)
     root.handlers.clear()
     root.addHandler(stream_handler)
     root.addHandler(file_handler)

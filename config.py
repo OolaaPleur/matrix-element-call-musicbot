@@ -77,6 +77,7 @@ class Config:
         "worker.log_backups": 5,
         "playlist.max_tracks_per_request": 50,
         "playlist.background_load_concurrency": 4,
+        "logging.level": "INFO",
         "logging.file": "logs/musicbot.log",
         "logging.clean_enabled": True,
         "logging.clean_file": "logs/musicbot.clean.log",
@@ -182,6 +183,12 @@ class Config:
             self.AUDIO_CACHE_MAX_BYTES = MIN_AUDIO_CACHE_MAX_BYTES
             self.AUDIO_CACHE_MAX_BYTES_CLAMPED = True
 
+        self.LOG_LEVEL = (
+            self._get_str("LOG_LEVEL", "logging", "level", default=self.DEFAULTS["logging.level"])
+            or self.DEFAULTS["logging.level"]
+        ).strip().upper()
+        if self.LOG_LEVEL not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+            raise ValueError("LOG_LEVEL/logging.level must be one of: DEBUG, INFO, WARNING, ERROR")
         self.LOG_FILE = Path(
             self._get_str("LOG_FILE", "logging", "file", default=self.DEFAULTS["logging.file"]) or self.DEFAULTS["logging.file"]
         )
@@ -515,6 +522,7 @@ class Config:
             f"worker.log_backups = {cls.DEFAULTS['worker.log_backups']}",
             f"playlist.max_tracks_per_request = {cls.DEFAULTS['playlist.max_tracks_per_request']}",
             f"playlist.background_load_concurrency = {cls.DEFAULTS['playlist.background_load_concurrency']}",
+            f"logging.level = {cls.DEFAULTS['logging.level']} | DEBUG | WARNING | ERROR",
             f"logging.file = {cls.DEFAULTS['logging.file']}",
             f"logging.clean_enabled = {str(cls.DEFAULTS['logging.clean_enabled']).lower()}",
             f"logging.clean_file = {cls.DEFAULTS['logging.clean_file']}",

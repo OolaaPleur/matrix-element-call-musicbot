@@ -71,6 +71,8 @@ max_tracks_per_request = 50
 background_load_concurrency = 4
 
 [logging]
+# DEBUG | INFO | WARNING | ERROR; the LOG_LEVEL environment variable overrides it
+level = "INFO"
 file = "logs/musicbot.log"
 clean_enabled = true
 clean_file = "logs/musicbot.clean.log"
